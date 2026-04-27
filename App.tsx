@@ -33,6 +33,7 @@ const translations = {
     historyTitle: "Download History",
     processing: "Processing...",
     btnNoWm: "Download Media",
+    btnDownloadAll: "Download All",
     btnWm: "Open Source",
     btnAudio: "Copy Link",
     f1Title: "Multi Platform",
@@ -74,6 +75,7 @@ const translations = {
     historyTitle: "Lịch sử tải xuống",
     processing: "Đang xử lý...",
     btnNoWm: "Tải media",
+    btnDownloadAll: "Tải tất cả",
     btnWm: "Mở link gốc",
     btnAudio: "Copy link",
     f1Title: "Nhiều nền tảng",
@@ -185,7 +187,9 @@ const App: React.FC = () => {
       setHistory(updatedHistory);
       localStorage.setItem(historyKey, JSON.stringify(updatedHistory));
 
-      await forceDownload(response.data.media[0].url, response.data.media[0].filename);
+      if (response.data.media.length === 1) {
+        await forceDownload(response.data.media[0].url, response.data.media[0].filename);
+      }
     } catch (err: any) {
       setError(err?.message || t.error);
     } finally {

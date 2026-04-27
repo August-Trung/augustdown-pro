@@ -587,7 +587,7 @@ const extractFacebook = async (sourceUrl) => {
     id: `${id}-video-${index + 1}`,
     type: "video",
     url,
-    thumbnail: cover,
+    thumbnail: url,
     filename: sanitizeFilename(
       `facebook-${id}-${index + 1}.${videoExtensionForUrl(url)}`
     ),
@@ -599,7 +599,7 @@ const extractFacebook = async (sourceUrl) => {
       id: `${id}-video-${media.length + 1}`,
       type: "video",
       url: ogVideo,
-      thumbnail: cover,
+      thumbnail: ogVideo,
       filename: filenameFor("facebook", id, media.length, "video", title),
     });
   }
