@@ -7,12 +7,13 @@ Multi-platform media downloader built from the working `instadownloader-pro` Rea
 - Instagram public Reel, post, TV, photo, and carousel extraction via `instagram-url-direct`.
 - TikTok public video/photo extraction via `https://www.tikwm.com/api/?url=...&hd=1`.
 - Facebook public video/image/reel extraction from page metadata and embedded video JSON.
-- Unified backend API: `POST /api/extract` with `{ "platform": "instagram" | "tiktok", "url": "..." }`.
+- YouTube public video extraction via `@distube/ytdl-core`, with `/api/download` streamed through local `yt-dlp`.
+- Unified backend API: `POST /api/extract` with `{ "platform": "instagram" | "tiktok" | "facebook" | "youtube", "url": "..." }`.
 - Normalized response: `platform`, `id`, `sourceUrl`, `title`, `cover`, `author`, and `media[]`.
 - Downloads are proxied through `/api/download` instead of automatically opening CDN tabs.
 - React UI with platform selector, paste/fetch, media preview, multi-item list, VI/EN text, and per-platform history.
 - Local Facebook session cookie storage for login-gated Story/highlight attempts.
-- YouTube and X/Twitter are marked coming soon.
+- X/Twitter is marked coming soon.
 
 ## Run
 
@@ -23,6 +24,19 @@ npm run dev
 
 Frontend runs at `http://localhost:3000`.
 Backend runs at `http://localhost:8788`.
+
+YouTube downloads require `yt-dlp` on `PATH`:
+
+```bash
+yt-dlp --version
+```
+
+For faster YouTube 720p/1080p downloads, install `aria2c`. The backend will
+auto-detect the WinGet install path or use `ARIA2C_PATH` when provided.
+
+```bash
+winget install --id aria2.aria2 --exact
+```
 
 ## Build
 

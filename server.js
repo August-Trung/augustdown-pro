@@ -3,17 +3,56 @@ import cors from "cors";
 import { instagramGetUrl } from "instagram-url-direct";
 import fs from "node:fs";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import ytdl from "@distube/ytdl-core";
 
 const app = express();
 const port = Number(process.env.PORT || 8788);
 const facebookCookiePath = path.join(process.cwd(), "facebook-cookie.local");
 
+const findAria2Path = () => {
+  const envPath = process.env.ARIA2C_PATH;
+  if (envPath && fs.existsSync(envPath)) return envPath;
+
+  const wingetRoot = path.join(
+    process.env.LOCALAPPDATA || "",
+    "Microsoft",
+    "WinGet",
+    "Packages"
+  );
+
+  try {
+    for (const packageDir of fs.readdirSync(wingetRoot)) {
+      if (!packageDir.toLowerCase().startsWith("aria2.aria2_")) continue;
+      const fullPackageDir = path.join(wingetRoot, packageDir);
+      for (const versionDir of fs.readdirSync(fullPackageDir)) {
+        const candidate = path.join(fullPackageDir, versionDir, "aria2c.exe");
+        if (fs.existsSync(candidate)) return candidate;
+      }
+    }
+  } catch {
+    // aria2 is optional.
+  }
+
+  return "";
+};
+
+const aria2Path = findAria2Path();
+const youtubeDownloaderArgs = aria2Path
+  ? [
+      "--downloader",
+      aria2Path,
+      "--downloader-args",
+      "aria2c:-x 16 -s 16 -k 1M --file-allocation=none",
+    ]
+  : [];
+
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 
-const supportedPlatforms = new Set(["instagram", "tiktok", "facebook"]);
+const supportedPlatforms = new Set(["instagram", "tiktok", "facebook", "youtube"]);
 
 const platformLabels = {
   instagram: "Instagram",
@@ -80,6 +119,14 @@ const isFacebookUrl = (value) =>
     /(^|\.)((facebook\.com)|(fb\.watch)|(m\.facebook\.com)|(web\.facebook\.com))$/i.test(hostname)
   );
 
+const isYouTubeUrl = (value) => {
+  try {
+    return ytdl.validateURL(value);
+  } catch {
+    return false;
+  }
+};
+
 const isFacebookStoryUrl = (value) => {
   try {
     return new URL(value).pathname.includes("/stories/");
@@ -102,7 +149,7 @@ const normalizeInstagramUrl = (value) => {
 
 const isAllowedMediaUrl = (value) =>
   isUrlForHost(value, (hostname) =>
-    /(^|\.)(fbcdn\.net|fbsbx\.com|facebook\.com|cdninstagram\.com|instagram\.com|tikwm\.com|tiktokcdn(?:-[a-z0-9]+)?\.com|byteoversea\.com|ibyteimg\.com|ibytedtos\.com|muscdn\.com|snssdk\.com)$/i.test(
+    /(^|\.)(fbcdn\.net|fbsbx\.com|facebook\.com|cdninstagram\.com|instagram\.com|tikwm\.com|tiktokcdn(?:-[a-z0-9]+)?\.com|byteoversea\.com|ibyteimg\.com|ibytedtos\.com|muscdn\.com|snssdk\.com|ytimg\.com|googlevideo\.com)$/i.test(
       hostname
     )
   );
@@ -342,6 +389,7 @@ const chooseBestFacebookMediaUrls = (urls, type) => {
 const refererForMediaUrl = (url) => {
   if (/facebook|fbcdn|fbsbx/i.test(url)) return "https://www.facebook.com/";
   if (/tik/i.test(url)) return "https://www.tiktok.com/";
+  if (/ytimg|googlevideo|youtube/i.test(url)) return "https://www.youtube.com/";
   return "https://www.instagram.com/";
 };
 
@@ -353,6 +401,191 @@ const mediaHeaders = (url) => ({
     ? { Cookie: getFacebookCookie() }
     : {}),
 });
+
+const parseYouTubeDownloadToken = (value) => {
+  const match = String(value || "").match(/^youtube:([^:]+):([^:]+)$/);
+  if (!match) return null;
+  return {
+    videoId: match[1],
+    format: match[2],
+  };
+};
+
+const streamYouTubeWithYtDlp = (videoId, format, filename, res) =>
+  new Promise((resolve, reject) => {
+    const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    const isAudio = format === "mp3";
+    const args = isAudio
+      ? [
+          "--quiet",
+          "--no-progress",
+          "--no-playlist",
+          "--no-warnings",
+          "--http-chunk-size",
+          "10M",
+          "--retries",
+          "10",
+          ...youtubeDownloaderArgs,
+          "--extract-audio",
+          "--audio-format",
+          "mp3",
+          "--audio-quality",
+          "0",
+          "--output",
+          "-",
+          watchUrl,
+        ]
+      : [
+          "--quiet",
+          "--no-progress",
+          "--no-playlist",
+          "--no-warnings",
+          "--http-chunk-size",
+          "10M",
+          "--retries",
+          "10",
+          ...youtubeDownloaderArgs,
+          "--format",
+          `bestvideo[height<=${format}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=${format}]+bestaudio/best[height<=${format}][ext=mp4][vcodec!=none][acodec!=none]/18`,
+          "--merge-output-format",
+          "mp4",
+          "--output",
+          "-",
+          watchUrl,
+        ];
+    const child = spawn(
+      "yt-dlp",
+      args,
+      { windowsHide: true }
+    );
+    const stderr = [];
+
+    res.setHeader("Content-Type", isAudio ? "audio/mpeg" : "video/mp4");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.setHeader("Cache-Control", "private, max-age=0, no-store");
+
+    child.stderr.on("data", (chunk) => {
+      stderr.push(chunk.toString());
+    });
+
+    child.on("error", reject);
+    child.stdout.on("error", reject);
+    res.on("close", () => {
+      if (!res.writableEnded && !child.killed) child.kill();
+    });
+
+    child.stdout.pipe(res);
+    child.on("close", (code) => {
+      if (code === 0 || res.writableEnded) {
+        resolve();
+        return;
+      }
+      reject(
+        new Error(
+          stderr.join("").trim() || `yt-dlp exited with status ${code}`
+        )
+      );
+    });
+  });
+
+const getYouTubeInfoWithYtDlp = (sourceUrl) =>
+  new Promise((resolve, reject) => {
+    const child = spawn(
+      "yt-dlp",
+      [
+        "--dump-single-json",
+        "--no-playlist",
+        "--no-warnings",
+        "--skip-download",
+        sourceUrl,
+      ],
+      { windowsHide: true }
+    );
+    const stdout = [];
+    const stderr = [];
+
+    child.stdout.on("data", (chunk) => stdout.push(chunk));
+    child.stderr.on("data", (chunk) => stderr.push(chunk));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      const output = Buffer.concat(stdout).toString("utf8").trim();
+      if (code !== 0) {
+        reject(
+          new Error(
+            Buffer.concat(stderr).toString("utf8").trim() ||
+              `yt-dlp exited with status ${code}`
+          )
+        );
+        return;
+      }
+
+      try {
+        resolve(JSON.parse(output));
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
+
+const chooseYouTubeYtDlpFormat = (formats = []) => {
+  const progressive = formats
+    .filter(
+      (format) =>
+        format.vcodec &&
+        format.vcodec !== "none" &&
+        format.acodec &&
+        format.acodec !== "none" &&
+        format.ext === "mp4"
+    )
+    .sort((a, b) => (toNumber(b.height) || 0) - (toNumber(a.height) || 0));
+
+  return progressive[0] || formats.find((format) => format.format_id === "18");
+};
+
+const getYouTubeDownloadOptions = (info, cover) => {
+  const id = info.id || "";
+  const videoFormats = (info.formats || [])
+    .filter(
+      (format) =>
+        format.format_id &&
+        format.vcodec &&
+        format.vcodec !== "none" &&
+        format.ext === "mp4" &&
+        toNumber(format.height)
+    )
+    .sort((a, b) => (toNumber(b.height) || 0) - (toNumber(a.height) || 0));
+  const seenHeights = new Set();
+  const media = [];
+
+  for (const format of videoFormats) {
+    const height = toNumber(format.height);
+    if (!height || seenHeights.has(height)) continue;
+    seenHeights.add(height);
+    const hasAudio = format.acodec && format.acodec !== "none";
+    const label = `MP4 ${format.format_note || `${height}p`}`;
+    media.push({
+      id: `${id}-${height}p`,
+      type: "video",
+      url: `youtube:${id}:${height}`,
+      thumbnail: cover,
+      filename: sanitizeFilename(`youtube-${id}-${height}p.mp4`),
+      label: hasAudio ? label : `${label} + audio`,
+      width: toNumber(format.width),
+      height,
+    });
+  }
+
+  media.push({
+    id: `${id}-mp3`,
+    type: "audio",
+    url: `youtube:${id}:mp3`,
+    thumbnail: cover,
+    filename: sanitizeFilename(`youtube-${id}-audio.mp3`),
+    label: "MP3 audio",
+  });
+
+  return media;
+};
 
 const extractInstagram = async (sourceUrl) => {
   if (!isInstagramUrl(sourceUrl)) {
@@ -653,10 +886,63 @@ const extractFacebook = async (sourceUrl) => {
   };
 };
 
+const chooseYouTubeFormat = (formats) => {
+  const progressive = formats
+    .filter((format) => format.hasVideo && format.hasAudio && format.url)
+    .sort((a, b) => {
+      const aHeight = toNumber(a.height) || 0;
+      const bHeight = toNumber(b.height) || 0;
+      return bHeight - aHeight;
+    });
+
+  if (progressive.length) return progressive[0];
+
+  return formats
+    .filter((format) => format.hasVideo && format.url)
+    .sort((a, b) => (toNumber(b.height) || 0) - (toNumber(a.height) || 0))[0];
+};
+
+const extractYouTube = async (sourceUrl) => {
+  if (!isYouTubeUrl(sourceUrl)) {
+    const error = new Error("Vui lòng nhập link YouTube hợp lệ.");
+    error.status = 400;
+    throw error;
+  }
+
+  const info = await getYouTubeInfoWithYtDlp(sourceUrl);
+  const thumbnails = Array.isArray(info.thumbnails) ? info.thumbnails : [];
+  const cover =
+    info.thumbnail ||
+    thumbnails.slice().sort((a, b) => (b.width || 0) - (a.width || 0))[0]?.url ||
+    "/ver-bigger-logo.png";
+  const id = info.id || ytdl.getURLVideoID(sourceUrl);
+  const media = getYouTubeDownloadOptions({ ...info, id }, cover);
+  if (!media.length) {
+    throw new Error("Không tìm thấy định dạng tải phù hợp cho video YouTube này.");
+  }
+
+  return {
+    platform: "youtube",
+    id,
+    sourceUrl: info.webpage_url || `https://www.youtube.com/watch?v=${id}`,
+    title: info.title || "YouTube video",
+    cover,
+    author: {
+      id: info.channel_id || info.uploader_id || info.channel || "youtube",
+      unique_id: info.uploader_id || info.channel || info.uploader || "youtube",
+      nickname: info.uploader || info.channel || "YouTube",
+      avatar: "/ver-bigger-logo.png",
+      verified: Boolean(info.channel_is_verified),
+    },
+    media,
+  };
+};
+
 const extractByPlatform = async (platform, url) => {
   if (platform === "instagram") return extractInstagram(url);
   if (platform === "tiktok") return extractTikTok(url);
   if (platform === "facebook") return extractFacebook(url);
+  if (platform === "youtube") return extractYouTube(url);
 
   const label = platformLabels[platform] || platform || "Platform";
   const error = new Error(`${label} đang ở trạng thái coming soon hoặc experimental.`);
@@ -672,7 +958,7 @@ app.get("/api/health", (_req, res) => {
       instagram: "ready",
       tiktok: "ready",
       facebook: "ready",
-      youtube: "coming_soon",
+      youtube: "ready",
       twitter: "coming_soon",
     },
   });
@@ -681,6 +967,29 @@ app.get("/api/health", (_req, res) => {
 app.get("/api/download", async (req, res) => {
   const url = String(req.query.url || "").trim();
   const filename = sanitizeFilename(req.query.filename);
+  const youtubeDownload = parseYouTubeDownloadToken(url);
+
+  if (youtubeDownload) {
+    try {
+      await streamYouTubeWithYtDlp(
+        youtubeDownload.videoId,
+        youtubeDownload.format,
+        filename,
+        res
+      );
+      return;
+    } catch (error) {
+      console.error("YouTube download failed:", error);
+      if (!res.headersSent) {
+        return res.status(502).json({
+          code: 1,
+          msg: error?.message || "Không thể tải video YouTube qua server.",
+        });
+      }
+      res.destroy(error);
+      return;
+    }
+  }
 
   if (!url || !isAllowedMediaUrl(url)) {
     return res.status(400).json({
@@ -725,6 +1034,14 @@ app.get("/api/download", async (req, res) => {
 
 app.get("/api/preview", async (req, res) => {
   const url = String(req.query.url || "").trim();
+  const youtubeDownload = parseYouTubeDownloadToken(url);
+
+  if (youtubeDownload) {
+    return res.redirect(
+      302,
+      `https://i.ytimg.com/vi/${encodeURIComponent(youtubeDownload.videoId)}/hqdefault.jpg`
+    );
+  }
 
   if (!url || !isAllowedMediaUrl(url)) {
     return res.status(400).json({
@@ -869,6 +1186,21 @@ app.post("/api/facebook", async (req, res) => {
     res.status(error.status || 502).json({
       code: 1,
       msg: error?.message || "Không thể lấy media Facebook.",
+    });
+  }
+});
+
+app.post("/api/youtube", async (req, res) => {
+  const startedAt = Date.now();
+  const url = String(req.body?.url || "").trim();
+
+  try {
+    const data = await extractYouTube(url);
+    res.json(ok(data, startedAt));
+  } catch (error) {
+    res.status(error.status || 502).json({
+      code: 1,
+      msg: error?.message || "Không thể lấy video YouTube.",
     });
   }
 });

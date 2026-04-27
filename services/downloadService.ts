@@ -6,26 +6,12 @@ export const downloadMediaFile = async (
     url
   )}&filename=${encodeURIComponent(filename)}`;
 
-  const response = await fetch(downloadUrl);
-  if (!response.ok) {
-    let message = "Could not download media";
-    try {
-      const data = await response.json();
-      message = data.msg || message;
-    } catch {
-      // Keep default message for non-JSON failures.
-    }
-    throw new Error(message);
-  }
-
-  const blob = await response.blob();
-  const blobUrl = window.URL.createObjectURL(blob);
   const anchor = document.createElement("a");
-  anchor.href = blobUrl;
+  anchor.href = downloadUrl;
   anchor.download = filename;
+  anchor.rel = "noopener";
   document.body.appendChild(anchor);
   anchor.click();
-  window.URL.revokeObjectURL(blobUrl);
   document.body.removeChild(anchor);
 };
 
