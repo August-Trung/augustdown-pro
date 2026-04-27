@@ -114,12 +114,46 @@ const ok = (data, startedAt) => ({
   data,
 });
 
-const normalizeCookie = (value = "") =>
-  String(value)
+const normalizeCookie = (value = "") => {
+  const input = String(value || "").trim();
+  if (!input) return "";
+
+  try {
+    const parsed = JSON.parse(input);
+    if (Array.isArray(parsed)) {
+      return parsed
+        .filter((item) => item?.name && item?.value)
+        .map((item) => `${item.name}=${item.value}`)
+        .join("; ");
+    }
+  } catch {
+    // Fall through to text parsing.
+  }
+
+  const keyValueLines = input
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const match = line.match(/^([A-Za-z0-9_.-]+)\s*[:=]\s*(.+)$/);
+      return match ? `${match[1]}=${match[2]}` : "";
+    })
+    .filter(Boolean);
+
+  if (
+    keyValueLines.length &&
+    keyValueLines.some((line) => line.startsWith("c_user=")) &&
+    keyValueLines.some((line) => line.startsWith("xs="))
+  ) {
+    return keyValueLines.join("; ");
+  }
+
+  return input
     .replace(/\r?\n/g, " ")
     .replace(/\s*;\s*/g, "; ")
     .replace(/\s+/g, " ")
     .trim();
+};
 
 const getFacebookCookie = () => {
   const envCookie = normalizeCookie(process.env.FACEBOOK_COOKIE || "");
@@ -243,6 +277,66 @@ const splitFacebookMediaUrls = (urls) => {
     videoUrls: unique(videoUrls),
     imageUrls: unique(imageUrls),
   };
+};
+
+const decodeFacebookEfg = (url) => {
+  try {
+    const value = new URL(url).searchParams.get("efg");
+    if (!value) return null;
+    return JSON.parse(Buffer.from(value, "base64").toString("utf8"));
+  } catch {
+    return null;
+  }
+};
+
+const facebookAssetKey = (url, index) => {
+  const efg = decodeFacebookEfg(url);
+  if (efg?.xpv_asset_id) return `asset:${efg.xpv_asset_id}`;
+  if (efg?.asset_id) return `asset:${efg.asset_id}`;
+
+  try {
+    const parsed = new URL(url);
+    const path = parsed.pathname.replace(/\/+/g, "/");
+    const file = path.split("/").filter(Boolean).pop() || "";
+    return file ? `file:${file.replace(/\.(mp4|m3u8|jpg|jpeg|png|webp)$/i, "")}` : `url:${index}`;
+  } catch {
+    return `url:${index}`;
+  }
+};
+
+const facebookVideoScore = (url) => {
+  const efg = decodeFacebookEfg(url);
+  const tag = String(efg?.vencode_tag || "");
+  let score = 0;
+
+  if (/\.mp4(\?|$)/i.test(url)) score += 1000;
+  if (/\.m3u8(\?|$)/i.test(url)) score -= 100;
+  if (/\bhd\b|\.hd|1280|1080|720/i.test(tag)) score += 500;
+  if (/\bsd\b|\.sd|400/i.test(tag)) score -= 50;
+
+  try {
+    const bitrate = Number(new URL(url).searchParams.get("bitrate"));
+    if (Number.isFinite(bitrate)) score += bitrate / 1000;
+  } catch {
+    // URL score remains usable without query parsing.
+  }
+
+  return score;
+};
+
+const chooseBestFacebookMediaUrls = (urls, type) => {
+  const groups = new Map();
+
+  urls.forEach((url, index) => {
+    const key = facebookAssetKey(url, index);
+    const current = groups.get(key);
+    const score = type === "video" ? facebookVideoScore(url) : url.length;
+    if (!current || score > current.score) {
+      groups.set(key, { url, score });
+    }
+  });
+
+  return [...groups.values()].map((item) => item.url);
 };
 
 const refererForMediaUrl = (url) => {
@@ -469,7 +563,10 @@ const extractFacebook = async (sourceUrl) => {
   }
 
   const allMediaUrls = extractFacebookUrls(html);
-  const { videoUrls, imageUrls } = splitFacebookMediaUrls(allMediaUrls);
+  const { videoUrls: rawVideoUrls, imageUrls: rawImageUrls } =
+    splitFacebookMediaUrls(allMediaUrls);
+  const videoUrls = chooseBestFacebookMediaUrls(rawVideoUrls, "video");
+  const imageUrls = chooseBestFacebookMediaUrls(rawImageUrls, "image");
   const cover =
     getMetaContent(html, "og:image") ||
     getMetaContent(html, "twitter:image") ||

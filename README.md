@@ -54,4 +54,4 @@ curl "http://localhost:8788/api/download?url=<media-url>&filename=media.mp4"
 
 ## Notes
 
-Private, deleted, geo-blocked, story-only, group-only, login-gated, or expired URLs may fail depending on upstream platform limits. Facebook Story/highlight URLs often require a logged-in session cookie with permission to view that story. For local use, select Facebook and paste a cookie string containing `c_user` and `xs`; it is saved to ignored local file `facebook-cookie.local`. Download only content you have rights to use.
+Private, deleted, geo-blocked, story-only, group-only, login-gated, or expired URLs may fail depending on upstream platform limits. Facebook Story/highlight URLs often require a logged-in session cookie with permission to view that story. For local use, select Facebook and paste either a raw cookie header, a JSON cookie export, or `c_user: ...` / `xs: ...` lines; it is saved to ignored local file `facebook-cookie.local`. Download only content you have rights to use.
