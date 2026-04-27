@@ -535,52 +535,110 @@ const createYouTubePrepareJob = (videoId, format, filename) => {
   return job;
 };
 
-const streamYouTubeWithYtDlp = (videoId, format, filename, res) =>
+const getYouTubeDirectUrls = (videoId, format) =>
   new Promise((resolve, reject) => {
     const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
-    const isAudio = format === "mp3";
-    const tempPath = makeTempDownloadPath(videoId, isAudio ? "mp3" : "mp4");
-    const child = spawn("yt-dlp", youtubeYtDlpArgs(videoId, format, tempPath), {
-      windowsHide: true,
-    });
+    const selector =
+      format === "mp3"
+        ? "bestaudio[ext=m4a]/bestaudio"
+        : `bestvideo[height<=${format}][ext=mp4]+bestaudio[ext=m4a]/best[height<=${format}][ext=mp4][vcodec!=none][acodec!=none]/18`;
+    const child = spawn(
+      "yt-dlp",
+      ["--no-playlist", "--no-warnings", "--get-url", "--format", selector, watchUrl],
+      { windowsHide: true }
+    );
+    const stdout = [];
     const stderr = [];
 
-    child.stderr.on("data", (chunk) => {
-      stderr.push(chunk.toString());
-    });
-
+    child.stdout.on("data", (chunk) => stdout.push(chunk));
+    child.stderr.on("data", (chunk) => stderr.push(chunk));
     child.on("error", reject);
-    res.on("close", () => {
-      if (!res.writableEnded && !child.killed) child.kill();
-    });
-
     child.on("close", (code) => {
-      if (code !== 0) {
-        fs.rm(tempPath, { force: true }, () => {});
+      const urls = Buffer.concat(stdout)
+        .toString("utf8")
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+
+      if (code !== 0 || !urls.length) {
         reject(
           new Error(
-            stderr.join("").trim() || `yt-dlp exited with status ${code}`
+            Buffer.concat(stderr).toString("utf8").trim() ||
+              "Không lấy được URL stream YouTube."
           )
         );
         return;
       }
 
-      res.setHeader("Content-Type", isAudio ? "audio/mpeg" : "video/mp4");
-      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-      res.setHeader("Cache-Control", "private, max-age=0, no-store");
-      try {
-        res.setHeader("Content-Length", fs.statSync(tempPath).size);
-      } catch {
-        // Content-Length is optional.
-      }
+      resolve(urls);
+    });
+  });
 
-      const output = fs.createReadStream(tempPath);
-      output.on("error", reject);
-      output.on("close", () => {
-        fs.rm(tempPath, { force: true }, () => {});
-      });
-      output.pipe(res);
-      output.on("end", resolve);
+const streamYouTubeWithYtDlp = (videoId, format, filename, res) =>
+  new Promise(async (resolve, reject) => {
+    const isAudio = format === "mp3";
+    let urls;
+    try {
+      urls = await getYouTubeDirectUrls(videoId, format);
+    } catch (error) {
+      reject(error);
+      return;
+    }
+
+    const ffmpegArgs = isAudio
+      ? [
+          "-hide_banner",
+          "-loglevel",
+          "error",
+          "-nostdin",
+          "-i",
+          urls[0],
+          "-vn",
+          "-c:a",
+          "libmp3lame",
+          "-b:a",
+          "192k",
+          "-f",
+          "mp3",
+          "pipe:1",
+        ]
+      : [
+          "-hide_banner",
+          "-loglevel",
+          "error",
+          "-nostdin",
+          ...urls.flatMap((url) => ["-i", url]),
+          "-map",
+          "0:v:0",
+          "-map",
+          urls.length > 1 ? "1:a:0" : "0:a:0",
+          "-c",
+          "copy",
+          "-movflags",
+          "frag_keyframe+empty_moov",
+          "-f",
+          "mp4",
+          "pipe:1",
+        ];
+    const ffmpeg = spawn("ffmpeg", ffmpegArgs, { windowsHide: true });
+    const stderr = [];
+
+    res.setHeader("Content-Type", isAudio ? "audio/mpeg" : "video/mp4");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.setHeader("Cache-Control", "private, max-age=0, no-store");
+
+    ffmpeg.stderr.on("data", (chunk) => stderr.push(chunk.toString()));
+    ffmpeg.on("error", reject);
+    res.on("close", () => {
+      if (!ffmpeg.killed) ffmpeg.kill();
+    });
+    ffmpeg.stdout.pipe(res);
+    ffmpeg.on("close", (code) => {
+      if (code === 0 || res.writableEnded) {
+        resolve();
+        return;
+      }
+      reject(new Error(stderr.join("").trim() || `ffmpeg exited with status ${code}`));
     });
   });
 
