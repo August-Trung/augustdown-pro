@@ -112,7 +112,7 @@ const normalizeInstagramUrl = (value) => {
 
 const isAllowedMediaUrl = (value) =>
   isUrlForHost(value, (hostname) =>
-    /(^|\.)(fbcdn\.net|fbsbx\.com|facebook\.com|cdninstagram\.com|instagram\.com|tikwm\.com|tiktokcdn(?:-[a-z0-9]+)?\.com|byteoversea\.com|ibyteimg\.com|ibytedtos\.com|muscdn\.com|snssdk\.com)$/i.test(
+    /(^|\.)(fbcdn\.net|fbsbx\.com|facebook\.com|cdninstagram\.com|instagram\.com|tikwm\.com|tiktokcdn(?:-[a-z0-9]+)?\.com|byteoversea\.com|ibyteimg\.com|ibytedtos\.com|muscdn\.com|snssdk\.com|ytimg\.com|googlevideo\.com)$/i.test(
       hostname
     )
   );
@@ -352,6 +352,7 @@ const chooseBestFacebookMediaUrls = (urls, type) => {
 const refererForMediaUrl = (url) => {
   if (/facebook|fbcdn|fbsbx/i.test(url)) return "https://www.facebook.com/";
   if (/tik/i.test(url)) return "https://www.tiktok.com/";
+  if (/ytimg|googlevideo|youtube/i.test(url)) return "https://www.youtube.com/";
   return "https://www.instagram.com/";
 };
 
