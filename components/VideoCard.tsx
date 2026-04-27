@@ -173,7 +173,7 @@ const VideoCard: React.FC<VideoCardProps> = ({ data, t }) => {
           </div>
 
           <div className="space-y-2.5">
-            {data.media.length > 1 && (
+            {data.media.length > 1 && !isYouTube && (
               <button
                 onClick={handleDownloadAll}
                 disabled={localDownloading === "all"}
@@ -193,7 +193,11 @@ const VideoCard: React.FC<VideoCardProps> = ({ data, t }) => {
               {localDownloading === selected.id && (
                 <div className="w-3.5 h-3.5 border-2 border-black/20 border-t-black rounded-full animate-spin" />
               )}
-              {localDownloading === selected.id ? t.processing : t.btnNoWm}
+              {localDownloading === selected.id
+                ? t.processing
+                : isYouTube
+                  ? t.btnDownloadSelected
+                  : t.btnNoWm}
             </button>
 
             <div className="grid grid-cols-2 gap-2.5">
