@@ -31,6 +31,13 @@ YouTube downloads require `yt-dlp` on `PATH`:
 yt-dlp --version
 ```
 
+For faster YouTube 720p/1080p downloads, install `aria2c`. The backend will
+auto-detect the WinGet install path or use `ARIA2C_PATH` when provided.
+
+```bash
+winget install --id aria2.aria2 --exact
+```
+
 ## Build
 
 ```bash
