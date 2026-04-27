@@ -12,6 +12,7 @@ dist
 dist-ssr
 *.local
 facebook-cookie.local
+youtube-cookie.local
 
 # Editor directories and files
 .vscode/*

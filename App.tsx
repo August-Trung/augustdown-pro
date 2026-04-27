@@ -7,9 +7,12 @@ import { ExtractedMediaData, Platform } from "./types";
 import { downloadMediaFile } from "./services/downloadService";
 import {
   clearFacebookSession,
+  clearYouTubeSession,
   fetchExtractedMedia,
   fetchFacebookSession,
+  fetchYouTubeSession,
   saveFacebookSession,
+  saveYouTubeSession,
 } from "./services/extractService";
 
 const platforms: { id: Platform; label: string; status?: "soon" | "experimental" }[] = [
@@ -64,6 +67,12 @@ const translations = {
     fbCookiePlaceholder: "Paste raw cookie, JSON export, or c_user/xs lines here.",
     fbCookieSave: "Save cookie",
     fbCookieClear: "Clear",
+    ytCookieTitle: "YouTube session",
+    ytCookieReady: "Cookie saved",
+    ytCookieMissing: "Cookie helps avoid bot checks",
+    ytCookiePlaceholder: "Paste raw YouTube cookie or JSON cookie export here.",
+    ytCookieSave: "Save cookie",
+    ytCookieClear: "Clear",
   },
   vi: {
     title: "AugustDown Pro",
@@ -108,6 +117,12 @@ const translations = {
     fbCookiePlaceholder: "Dán raw cookie, JSON export hoặc dòng c_user/xs tại đây.",
     fbCookieSave: "Lưu cookie",
     fbCookieClear: "Xóa",
+    ytCookieTitle: "Phiên YouTube",
+    ytCookieReady: "Đã lưu cookie",
+    ytCookieMissing: "Cookie giúp tránh lỗi bot",
+    ytCookiePlaceholder: "Dán raw cookie YouTube hoặc JSON cookie export tại đây.",
+    ytCookieSave: "Lưu cookie",
+    ytCookieClear: "Xóa",
   },
 };
 
@@ -127,6 +142,9 @@ const App: React.FC = () => {
   const [facebookCookie, setFacebookCookie] = useState("");
   const [facebookCookieSaved, setFacebookCookieSaved] = useState(false);
   const [savingFacebookCookie, setSavingFacebookCookie] = useState(false);
+  const [youtubeCookie, setYouTubeCookie] = useState("");
+  const [youtubeCookieSaved, setYouTubeCookieSaved] = useState(false);
+  const [savingYouTubeCookie, setSavingYouTubeCookie] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const t = translations[lang];
 
@@ -145,6 +163,10 @@ const App: React.FC = () => {
     fetchFacebookSession()
       .then((session) => setFacebookCookieSaved(session.configured))
       .catch(() => setFacebookCookieSaved(false));
+
+    fetchYouTubeSession()
+      .then((session) => setYouTubeCookieSaved(session.configured))
+      .catch(() => setYouTubeCookieSaved(false));
   }, []);
 
   const resetApp = () => {
@@ -281,6 +303,34 @@ const App: React.FC = () => {
     }
   };
 
+  const handleSaveYouTubeCookie = async () => {
+    setSavingYouTubeCookie(true);
+    setError(null);
+    try {
+      await saveYouTubeSession(youtubeCookie);
+      setYouTubeCookie("");
+      setYouTubeCookieSaved(true);
+    } catch (err: any) {
+      setError(err?.message || t.error);
+    } finally {
+      setSavingYouTubeCookie(false);
+    }
+  };
+
+  const handleClearYouTubeCookie = async () => {
+    setSavingYouTubeCookie(true);
+    setError(null);
+    try {
+      await clearYouTubeSession();
+      setYouTubeCookie("");
+      setYouTubeCookieSaved(false);
+    } catch (err: any) {
+      setError(err?.message || t.error);
+    } finally {
+      setSavingYouTubeCookie(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[#07080c] text-white selection:bg-rose-500/30 pb-20">
       <Navbar
@@ -367,6 +417,49 @@ const App: React.FC = () => {
                   className="px-5 py-2 rounded-lg bg-white text-black text-[10px] font-black uppercase tracking-widest disabled:opacity-50"
                 >
                   {savingFacebookCookie ? t.processing : t.fbCookieSave}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {platform === "youtube" && (
+            <div className="max-w-2xl mx-auto mb-3 p-3 rounded-xl bg-zinc-950/80 border border-white/10">
+              <div className="flex items-center justify-between gap-3 mb-2">
+                <div>
+                  <div className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-500">
+                    {t.ytCookieTitle}
+                  </div>
+                  <div
+                    className={`mt-1 text-[10px] font-bold ${
+                      youtubeCookieSaved ? "text-emerald-400" : "text-amber-300"
+                    }`}
+                  >
+                    {youtubeCookieSaved ? t.ytCookieReady : t.ytCookieMissing}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleClearYouTubeCookie}
+                  disabled={savingYouTubeCookie || !youtubeCookieSaved}
+                  className="px-3 py-2 rounded-lg bg-zinc-900 text-zinc-400 hover:text-white border border-white/10 text-[10px] font-black uppercase tracking-widest disabled:opacity-40"
+                >
+                  {t.ytCookieClear}
+                </button>
+              </div>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <textarea
+                  value={youtubeCookie}
+                  onChange={(event) => setYouTubeCookie(event.target.value)}
+                  placeholder={t.ytCookiePlaceholder}
+                  className="min-h-[72px] sm:min-h-10 flex-1 bg-black/60 border border-white/10 rounded-lg px-3 py-2 text-xs text-white placeholder:text-zinc-600 focus:outline-none focus:border-rose-500/50 resize-y"
+                />
+                <button
+                  type="button"
+                  onClick={handleSaveYouTubeCookie}
+                  disabled={savingYouTubeCookie || !youtubeCookie.trim()}
+                  className="px-5 py-2 rounded-lg bg-white text-black text-[10px] font-black uppercase tracking-widest disabled:opacity-50"
+                >
+                  {savingYouTubeCookie ? t.processing : t.ytCookieSave}
                 </button>
               </div>
             </div>
