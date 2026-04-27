@@ -187,7 +187,7 @@ const App: React.FC = () => {
       setHistory(updatedHistory);
       localStorage.setItem(historyKey, JSON.stringify(updatedHistory));
 
-      if (response.data.media.length === 1) {
+      if (response.data.platform !== "youtube" && response.data.media.length === 1) {
         await forceDownload(response.data.media[0].url, response.data.media[0].filename);
       }
     } catch (err: any) {

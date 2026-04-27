@@ -8,6 +8,7 @@ export interface MediaItem {
   url: string;
   thumbnail: string;
   filename: string;
+  label?: string;
   width?: number;
   height?: number;
 }

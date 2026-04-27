@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { ExtractedMediaData, MediaItem } from "../types";
 import { downloadMediaFile, getPreviewUrl } from "../services/downloadService";
 
@@ -10,6 +10,12 @@ interface VideoCardProps {
 const VideoCard: React.FC<VideoCardProps> = ({ data, t }) => {
   const [localDownloading, setLocalDownloading] = useState<string | null>(null);
   const [selected, setSelected] = useState(data.media[0]);
+  const isYouTube = data.platform === "youtube";
+  const isProxyToken = selected.url.startsWith("youtube:");
+
+  useEffect(() => {
+    setSelected(data.media[0]);
+  }, [data]);
 
   const handleDownload = async (item: MediaItem) => {
     setLocalDownloading(item.id);
@@ -46,15 +52,22 @@ const VideoCard: React.FC<VideoCardProps> = ({ data, t }) => {
         <div className="w-full md:w-[260px] relative shrink-0 bg-black overflow-hidden">
           {selected.type === "video" ? (
             <video
-              src={selected.url}
+              src={isProxyToken ? undefined : selected.url}
               poster={getPreviewUrl(selected.thumbnail)}
               className="w-full h-full object-cover aspect-video md:aspect-auto"
               controls
               playsInline
             />
           ) : selected.type === "audio" ? (
-            <div className="w-full h-full min-h-[220px] flex items-center justify-center bg-zinc-950 p-5">
-              <audio src={selected.url} controls className="w-full" />
+            <div className="w-full h-full min-h-[220px] flex flex-col items-center justify-center bg-zinc-950 p-5">
+              <img
+                src={getPreviewUrl(selected.thumbnail)}
+                alt={selected.label || data.title}
+                className="w-28 h-28 rounded-xl object-cover border border-white/10 mb-4"
+              />
+              <span className="text-white text-xs font-black uppercase tracking-widest">
+                {selected.label || "Audio"}
+              </span>
             </div>
           ) : (
             <img
@@ -107,7 +120,32 @@ const VideoCard: React.FC<VideoCardProps> = ({ data, t }) => {
               {data.title}
             </p>
 
-            {data.media.length > 1 && (
+            {data.media.length > 1 && isYouTube && (
+              <div className="grid grid-cols-2 gap-2 mb-4">
+                {data.media.map((item) => (
+                  <button
+                    key={item.id}
+                    onClick={() => setSelected(item)}
+                    className={`min-h-12 rounded-lg border px-3 py-2 text-left transition-all ${
+                      selected.id === item.id
+                        ? "border-rose-400 bg-rose-500/10"
+                        : "border-white/10 bg-zinc-950/40 hover:bg-zinc-900"
+                    }`}
+                    title={item.label || item.filename}
+                  >
+                    <span className="block text-[11px] font-black uppercase text-white">
+                      {item.label || item.filename}
+                    </span>
+                    <span className="block text-[9px] uppercase text-zinc-500 font-bold mt-0.5">
+                      {item.type}
+                      {item.width && item.height ? ` · ${item.width}x${item.height}` : ""}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {data.media.length > 1 && !isYouTube && (
               <div className="grid grid-cols-4 gap-2 mb-4">
                 {data.media.map((item, index) => (
                   <button

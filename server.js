@@ -365,33 +365,52 @@ const mediaHeaders = (url) => ({
 });
 
 const parseYouTubeDownloadToken = (value) => {
-  const match = String(value || "").match(/^youtube:([^:]+):(\d+)$/);
+  const match = String(value || "").match(/^youtube:([^:]+):([^:]+)$/);
   if (!match) return null;
   return {
     videoId: match[1],
-    itag: Number(match[2]),
+    format: match[2],
   };
 };
 
-const streamYouTubeWithYtDlp = (videoId, filename, res) =>
+const streamYouTubeWithYtDlp = (videoId, format, filename, res) =>
   new Promise((resolve, reject) => {
     const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    const isAudio = format === "mp3";
+    const args = isAudio
+      ? [
+          "--quiet",
+          "--no-progress",
+          "--no-playlist",
+          "--no-warnings",
+          "--extract-audio",
+          "--audio-format",
+          "mp3",
+          "--audio-quality",
+          "0",
+          "--output",
+          "-",
+          watchUrl,
+        ]
+      : [
+          "--quiet",
+          "--no-progress",
+          "--no-playlist",
+          "--no-warnings",
+          "--format",
+          `${format}/18/best[ext=mp4][vcodec!=none][acodec!=none]/best[vcodec!=none][acodec!=none]`,
+          "--output",
+          "-",
+          watchUrl,
+        ];
     const child = spawn(
       "yt-dlp",
-      [
-        "--no-playlist",
-        "--no-warnings",
-        "--format",
-        "18/best[ext=mp4][vcodec!=none][acodec!=none]/best[vcodec!=none][acodec!=none]",
-        "--output",
-        "-",
-        watchUrl,
-      ],
+      args,
       { windowsHide: true }
     );
     const stderr = [];
 
-    res.setHeader("Content-Type", "video/mp4");
+    res.setHeader("Content-Type", isAudio ? "audio/mpeg" : "video/mp4");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     res.setHeader("Cache-Control", "private, max-age=0, no-store");
 
@@ -471,6 +490,52 @@ const chooseYouTubeYtDlpFormat = (formats = []) => {
     .sort((a, b) => (toNumber(b.height) || 0) - (toNumber(a.height) || 0));
 
   return progressive[0] || formats.find((format) => format.format_id === "18");
+};
+
+const getYouTubeDownloadOptions = (info, cover) => {
+  const id = info.id || "";
+  const videoFormats = (info.formats || [])
+    .filter(
+      (format) =>
+        format.format_id &&
+        format.vcodec &&
+        format.vcodec !== "none" &&
+        format.acodec &&
+        format.acodec !== "none" &&
+        format.ext === "mp4" &&
+        toNumber(format.height)
+    )
+    .sort((a, b) => (toNumber(b.height) || 0) - (toNumber(a.height) || 0));
+  const seenHeights = new Set();
+  const media = [];
+
+  for (const format of videoFormats) {
+    const height = toNumber(format.height);
+    if (!height || seenHeights.has(height)) continue;
+    seenHeights.add(height);
+    const label = `MP4 ${format.format_note || `${height}p`}`;
+    media.push({
+      id: `${id}-${format.format_id}`,
+      type: "video",
+      url: `youtube:${id}:${format.format_id}`,
+      thumbnail: cover,
+      filename: sanitizeFilename(`youtube-${id}-${height}p.mp4`),
+      label,
+      width: toNumber(format.width),
+      height,
+    });
+  }
+
+  media.push({
+    id: `${id}-mp3`,
+    type: "audio",
+    url: `youtube:${id}:mp3`,
+    thumbnail: cover,
+    filename: sanitizeFilename(`youtube-${id}-audio.mp3`),
+    label: "MP3 audio",
+  });
+
+  return media;
 };
 
 const extractInstagram = async (sourceUrl) => {
@@ -796,20 +861,16 @@ const extractYouTube = async (sourceUrl) => {
   }
 
   const info = await getYouTubeInfoWithYtDlp(sourceUrl);
-  const selectedFormat = chooseYouTubeYtDlpFormat(info.formats);
-  if (!selectedFormat) {
-    throw new Error("Không tìm thấy định dạng tải phù hợp cho video YouTube này.");
-  }
-
   const thumbnails = Array.isArray(info.thumbnails) ? info.thumbnails : [];
   const cover =
     info.thumbnail ||
     thumbnails.slice().sort((a, b) => (b.width || 0) - (a.width || 0))[0]?.url ||
     "/ver-bigger-logo.png";
   const id = info.id || ytdl.getURLVideoID(sourceUrl);
-  const filename = sanitizeFilename(
-    `youtube-${id}-${selectedFormat.format_note || selectedFormat.format_id}.mp4`
-  );
+  const media = getYouTubeDownloadOptions({ ...info, id }, cover);
+  if (!media.length) {
+    throw new Error("Không tìm thấy định dạng tải phù hợp cho video YouTube này.");
+  }
 
   return {
     platform: "youtube",
@@ -824,17 +885,7 @@ const extractYouTube = async (sourceUrl) => {
       avatar: "/ver-bigger-logo.png",
       verified: Boolean(info.channel_is_verified),
     },
-    media: [
-      {
-        id: `${id}-${selectedFormat.format_id}`,
-        type: "video",
-        url: `youtube:${id}:${selectedFormat.format_id}`,
-        thumbnail: cover,
-        filename,
-        width: toNumber(selectedFormat.width),
-        height: toNumber(selectedFormat.height),
-      },
-    ],
+    media,
   };
 };
 
@@ -871,7 +922,12 @@ app.get("/api/download", async (req, res) => {
 
   if (youtubeDownload) {
     try {
-      await streamYouTubeWithYtDlp(youtubeDownload.videoId, filename, res);
+      await streamYouTubeWithYtDlp(
+        youtubeDownload.videoId,
+        youtubeDownload.format,
+        filename,
+        res
+      );
       return;
     } catch (error) {
       console.error("YouTube download failed:", error);
