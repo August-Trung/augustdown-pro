@@ -1,14 +1,17 @@
 import express from "express";
 import cors from "cors";
 import { instagramGetUrl } from "instagram-url-direct";
+import fs from "node:fs";
+import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
 const app = express();
 const port = Number(process.env.PORT || 8788);
+const facebookCookiePath = path.join(process.cwd(), "facebook-cookie.local");
 
 app.use(cors());
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "2mb" }));
 
 const supportedPlatforms = new Set(["instagram", "tiktok", "facebook"]);
 
@@ -39,6 +42,8 @@ const extensionFor = (type, fallback = "mp4") => {
   if (type === "audio") return "mp3";
   return fallback;
 };
+
+const videoExtensionForUrl = (url) => (url.includes(".m3u8") ? "m3u8" : "mp4");
 
 const filenameFor = (platform, id, index, type, title) => {
   const base = String(title || `${platform}-${id}`)
@@ -75,6 +80,14 @@ const isFacebookUrl = (value) =>
     /(^|\.)((facebook\.com)|(fb\.watch)|(m\.facebook\.com)|(web\.facebook\.com))$/i.test(hostname)
   );
 
+const isFacebookStoryUrl = (value) => {
+  try {
+    return new URL(value).pathname.includes("/stories/");
+  } catch {
+    return false;
+  }
+};
+
 const makeInstagramId = (url) => {
   const match = url.match(/instagram\.com\/(?:reel|p|tv)\/([^/?#]+)/i);
   return match?.[1] || String(Date.now());
@@ -99,6 +112,70 @@ const ok = (data, startedAt) => ({
   msg: "success",
   processed_time: (Date.now() - startedAt) / 1000,
   data,
+});
+
+const normalizeCookie = (value = "") => {
+  const input = String(value || "").trim();
+  if (!input) return "";
+
+  try {
+    const parsed = JSON.parse(input);
+    if (Array.isArray(parsed)) {
+      return parsed
+        .filter((item) => item?.name && item?.value)
+        .map((item) => `${item.name}=${item.value}`)
+        .join("; ");
+    }
+  } catch {
+    // Fall through to text parsing.
+  }
+
+  const keyValueLines = input
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const match = line.match(/^([A-Za-z0-9_.-]+)\s*[:=]\s*(.+)$/);
+      return match ? `${match[1]}=${match[2]}` : "";
+    })
+    .filter(Boolean);
+
+  if (
+    keyValueLines.length &&
+    keyValueLines.some((line) => line.startsWith("c_user=")) &&
+    keyValueLines.some((line) => line.startsWith("xs="))
+  ) {
+    return keyValueLines.join("; ");
+  }
+
+  return input
+    .replace(/\r?\n/g, " ")
+    .replace(/\s*;\s*/g, "; ")
+    .replace(/\s+/g, " ")
+    .trim();
+};
+
+const getFacebookCookie = () => {
+  const envCookie = normalizeCookie(process.env.FACEBOOK_COOKIE || "");
+  if (envCookie) return envCookie;
+
+  try {
+    return normalizeCookie(fs.readFileSync(facebookCookiePath, "utf8"));
+  } catch {
+    return "";
+  }
+};
+
+const hasUsableFacebookCookie = (cookie) =>
+  /(?:^|;\s*)c_user=/.test(cookie) && /(?:^|;\s*)xs=/.test(cookie);
+
+const facebookHeaders = (cookie = "") => ({
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+  "Accept-Language": "vi,en-US;q=0.9,en;q=0.8",
+  Accept:
+    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+  ...(cookie ? { Cookie: cookie } : {}),
 });
 
 const publicInstagramError =
@@ -150,13 +227,24 @@ const extractFacebookUrls = (html) => {
     /"browser_native_hd_url"\s*:\s*"([^"]+)"/g,
     /"browser_native_sd_url"\s*:\s*"([^"]+)"/g,
     /"playable_url_quality_hd"\s*:\s*"([^"]+)"/g,
+    /"playable_url_dash"\s*:\s*"([^"]+)"/g,
     /"playable_url"\s*:\s*"([^"]+)"/g,
+    /"preferred_thumbnail"\s*:\s*\{[^}]*"uri"\s*:\s*"([^"]+)"/g,
+    /"thumbnailImage"\s*:\s*\{[^}]*"uri"\s*:\s*"([^"]+)"/g,
     /"hd_src"\s*:\s*"([^"]+)"/g,
     /"sd_src"\s*:\s*"([^"]+)"/g,
+    /"hd_src_no_ratelimit"\s*:\s*"([^"]+)"/g,
+    /"sd_src_no_ratelimit"\s*:\s*"([^"]+)"/g,
     /hd_src_no_ratelimit:"([^"]+)"/g,
     /sd_src_no_ratelimit:"([^"]+)"/g,
+    /https?:\\\/\\\/[^"'<>]+?\.m3u8[^"'<>]*/g,
     /https?:\\\/\\\/[^"'<>]+?\.mp4[^"'<>]*/g,
+    /https?:\\\/\\\/[^"'<>]+?\.jpg[^"'<>]*/g,
+    /https?:\\\/\\\/[^"'<>]+?\.webp[^"'<>]*/g,
+    /https?:\/\/[^"'<>]+?\.m3u8[^"'<>]*/g,
     /https?:\/\/[^"'<>]+?\.mp4[^"'<>]*/g,
+    /https?:\/\/[^"'<>]+?\.jpg[^"'<>]*/g,
+    /https?:\/\/[^"'<>]+?\.webp[^"'<>]*/g,
   ];
 
   const urls = [];
@@ -171,11 +259,100 @@ const extractFacebookUrls = (html) => {
   return unique(urls);
 };
 
+const splitFacebookMediaUrls = (urls) => {
+  const videoUrls = [];
+  const imageUrls = [];
+
+  urls.forEach((url) => {
+    if (/\.(mp4|m3u8)(\?|$)/i.test(url)) {
+      videoUrls.push(url);
+      return;
+    }
+    if (/\.(jpg|jpeg|png|webp)(\?|$)/i.test(url)) {
+      imageUrls.push(url);
+    }
+  });
+
+  return {
+    videoUrls: unique(videoUrls),
+    imageUrls: unique(imageUrls),
+  };
+};
+
+const decodeFacebookEfg = (url) => {
+  try {
+    const value = new URL(url).searchParams.get("efg");
+    if (!value) return null;
+    return JSON.parse(Buffer.from(value, "base64").toString("utf8"));
+  } catch {
+    return null;
+  }
+};
+
+const facebookAssetKey = (url, index) => {
+  const efg = decodeFacebookEfg(url);
+  if (efg?.xpv_asset_id) return `asset:${efg.xpv_asset_id}`;
+  if (efg?.asset_id) return `asset:${efg.asset_id}`;
+
+  try {
+    const parsed = new URL(url);
+    const path = parsed.pathname.replace(/\/+/g, "/");
+    const file = path.split("/").filter(Boolean).pop() || "";
+    return file ? `file:${file.replace(/\.(mp4|m3u8|jpg|jpeg|png|webp)$/i, "")}` : `url:${index}`;
+  } catch {
+    return `url:${index}`;
+  }
+};
+
+const facebookVideoScore = (url) => {
+  const efg = decodeFacebookEfg(url);
+  const tag = String(efg?.vencode_tag || "");
+  let score = 0;
+
+  if (/\.mp4(\?|$)/i.test(url)) score += 1000;
+  if (/\.m3u8(\?|$)/i.test(url)) score -= 100;
+  if (/\bhd\b|\.hd|1280|1080|720/i.test(tag)) score += 500;
+  if (/\bsd\b|\.sd|400/i.test(tag)) score -= 50;
+
+  try {
+    const bitrate = Number(new URL(url).searchParams.get("bitrate"));
+    if (Number.isFinite(bitrate)) score += bitrate / 1000;
+  } catch {
+    // URL score remains usable without query parsing.
+  }
+
+  return score;
+};
+
+const chooseBestFacebookMediaUrls = (urls, type) => {
+  const groups = new Map();
+
+  urls.forEach((url, index) => {
+    const key = facebookAssetKey(url, index);
+    const current = groups.get(key);
+    const score = type === "video" ? facebookVideoScore(url) : url.length;
+    if (!current || score > current.score) {
+      groups.set(key, { url, score });
+    }
+  });
+
+  return [...groups.values()].map((item) => item.url);
+};
+
 const refererForMediaUrl = (url) => {
   if (/facebook|fbcdn|fbsbx/i.test(url)) return "https://www.facebook.com/";
   if (/tik/i.test(url)) return "https://www.tiktok.com/";
   return "https://www.instagram.com/";
 };
+
+const mediaHeaders = (url) => ({
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+  Referer: refererForMediaUrl(url),
+  ...(/facebook|fbcdn|fbsbx/i.test(url) && getFacebookCookie()
+    ? { Cookie: getFacebookCookie() }
+    : {}),
+});
 
 const extractInstagram = async (sourceUrl) => {
   if (!isInstagramUrl(sourceUrl)) {
@@ -350,15 +527,11 @@ const extractFacebook = async (sourceUrl) => {
     throw error;
   }
 
+  const facebookCookie = getFacebookCookie();
+  const hasCookie = hasUsableFacebookCookie(facebookCookie);
   const response = await fetch(sourceUrl, {
     redirect: "follow",
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-      "Accept-Language": "vi,en-US;q=0.9,en;q=0.8",
-      Accept:
-        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    },
+    headers: facebookHeaders(facebookCookie),
   });
 
   if (!response.ok) {
@@ -367,10 +540,37 @@ const extractFacebook = async (sourceUrl) => {
 
   const html = await response.text();
   const resolvedUrl = response.url || sourceUrl;
-  const videoUrls = extractFacebookUrls(html);
+  const redirectedToLogin =
+    /\/login(\.php)?/i.test(resolvedUrl) ||
+    /id=["']login_form["']|name=["']login["']|Log in to Facebook|Đăng nhập Facebook/i.test(html);
+
+  if (redirectedToLogin) {
+    if (!hasCookie) {
+      throw new Error(
+        isFacebookStoryUrl(sourceUrl)
+          ? "Facebook Story/highlight cần cookie phiên Facebook. Hãy lưu cookie Facebook trong phần cấu hình rồi thử lại."
+          : "Facebook yêu cầu đăng nhập cho link này. Hãy lưu cookie Facebook trong phần cấu hình."
+      );
+    }
+    if (isFacebookStoryUrl(sourceUrl)) {
+      throw new Error(
+        "Facebook Story/highlight này cần đăng nhập để xem. Server hiện chưa có cookie phiên Facebook nên không thể lấy media."
+      );
+    }
+    throw new Error(
+      "Facebook yêu cầu đăng nhập cho link này. Hãy dùng link public hoặc cấu hình cookie phiên Facebook."
+    );
+  }
+
+  const allMediaUrls = extractFacebookUrls(html);
+  const { videoUrls: rawVideoUrls, imageUrls: rawImageUrls } =
+    splitFacebookMediaUrls(allMediaUrls);
+  const videoUrls = chooseBestFacebookMediaUrls(rawVideoUrls, "video");
+  const imageUrls = chooseBestFacebookMediaUrls(rawImageUrls, "image");
   const cover =
     getMetaContent(html, "og:image") ||
     getMetaContent(html, "twitter:image") ||
+    imageUrls[0] ||
     "/ver-bigger-logo.png";
   const title =
     getMetaContent(html, "og:title") ||
@@ -387,8 +587,10 @@ const extractFacebook = async (sourceUrl) => {
     id: `${id}-video-${index + 1}`,
     type: "video",
     url,
-    thumbnail: cover,
-    filename: filenameFor("facebook", id, index, "video", title),
+    thumbnail: url,
+    filename: sanitizeFilename(
+      `facebook-${id}-${index + 1}.${videoExtensionForUrl(url)}`
+    ),
   }));
 
   const ogVideo = getMetaContent(html, "og:video");
@@ -397,22 +599,39 @@ const extractFacebook = async (sourceUrl) => {
       id: `${id}-video-${media.length + 1}`,
       type: "video",
       url: ogVideo,
-      thumbnail: cover,
+      thumbnail: ogVideo,
       filename: filenameFor("facebook", id, media.length, "video", title),
     });
   }
 
-  if (!media.length && cover && cover !== "/ver-bigger-logo.png") {
-    media.push({
-      id: `${id}-image-1`,
-      type: "image",
-      url: cover,
-      thumbnail: cover,
-      filename: filenameFor("facebook", id, 0, "image", title),
+  const fallbackImages = unique([
+    ...imageUrls,
+    cover && cover !== "/ver-bigger-logo.png" ? cover : "",
+  ]);
+
+  if (!media.length && fallbackImages.length) {
+    fallbackImages.slice(0, 6).forEach((url, index) => {
+      media.push({
+        id: `${id}-image-${index + 1}`,
+        type: "image",
+        url,
+        thumbnail: url,
+        filename: filenameFor("facebook", id, index, "image", title),
+      });
     });
   }
 
   if (!media.length) {
+    if (isFacebookStoryUrl(sourceUrl)) {
+      if (!hasCookie) {
+        throw new Error(
+          "Facebook Story/highlight cần cookie phiên Facebook. Hãy lưu cookie Facebook trong phần cấu hình rồi thử lại."
+        );
+      }
+      throw new Error(
+        "Facebook Story không trả media cho server chưa đăng nhập. Story/reel highlight thường cần cookie phiên Facebook có quyền xem."
+      );
+    }
     throw new Error(
       "Facebook không trả dữ liệu media cho link này. Hãy kiểm tra link có public không, không phải private/group/story/deleted, rồi thử lại."
     );
@@ -472,11 +691,7 @@ app.get("/api/download", async (req, res) => {
 
   try {
     const upstream = await fetch(url, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        Referer: refererForMediaUrl(url),
-      },
+      headers: mediaHeaders(url),
     });
 
     if (!upstream.ok || !upstream.body) {
@@ -520,11 +735,7 @@ app.get("/api/preview", async (req, res) => {
 
   try {
     const upstream = await fetch(url, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        Referer: refererForMediaUrl(url),
-      },
+      headers: mediaHeaders(url),
     });
 
     if (!upstream.ok || !upstream.body) {
@@ -550,6 +761,38 @@ app.get("/api/preview", async (req, res) => {
       res.destroy(error);
     }
   }
+});
+
+app.get("/api/facebook/session", (_req, res) => {
+  const cookie = getFacebookCookie();
+  res.json({
+    code: 0,
+    configured: hasUsableFacebookCookie(cookie),
+    source: process.env.FACEBOOK_COOKIE ? "env" : cookie ? "local" : "none",
+  });
+});
+
+app.post("/api/facebook/session", (req, res) => {
+  const cookie = normalizeCookie(req.body?.cookie || "");
+
+  if (!hasUsableFacebookCookie(cookie)) {
+    return res.status(400).json({
+      code: 1,
+      msg: "Cookie Facebook cần có ít nhất c_user và xs.",
+    });
+  }
+
+  fs.writeFileSync(facebookCookiePath, cookie, "utf8");
+  res.json({ code: 0, configured: true });
+});
+
+app.delete("/api/facebook/session", (_req, res) => {
+  try {
+    fs.rmSync(facebookCookiePath, { force: true });
+  } catch {
+    // File is optional.
+  }
+  res.json({ code: 0, configured: Boolean(process.env.FACEBOOK_COOKIE) });
 });
 
 app.post("/api/extract", async (req, res) => {

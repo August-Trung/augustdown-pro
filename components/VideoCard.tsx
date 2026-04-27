@@ -22,6 +22,20 @@ const VideoCard: React.FC<VideoCardProps> = ({ data, t }) => {
     }
   };
 
+  const handleDownloadAll = async () => {
+    setLocalDownloading("all");
+    try {
+      for (const item of data.media) {
+        await downloadMediaFile(item.url, item.filename);
+        await new Promise((resolve) => setTimeout(resolve, 350));
+      }
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setLocalDownloading(null);
+    }
+  };
+
   const copyLink = async () => {
     await navigator.clipboard.writeText(selected.url);
   };
@@ -121,6 +135,18 @@ const VideoCard: React.FC<VideoCardProps> = ({ data, t }) => {
           </div>
 
           <div className="space-y-2.5">
+            {data.media.length > 1 && (
+              <button
+                onClick={handleDownloadAll}
+                disabled={localDownloading === "all"}
+                className="w-full py-3 bg-rose-600 text-white text-[11px] font-black uppercase tracking-widest rounded-xl transition-all hover:bg-rose-500 flex items-center justify-center gap-2.5 shadow-xl shadow-rose-500/10 active:scale-[0.98] disabled:opacity-50"
+              >
+                {localDownloading === "all" && (
+                  <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                )}
+                {localDownloading === "all" ? t.processing : t.btnDownloadAll}
+              </button>
+            )}
             <button
               onClick={() => handleDownload(selected)}
               disabled={localDownloading === selected.id}
