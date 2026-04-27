@@ -40,6 +40,8 @@ const extensionFor = (type, fallback = "mp4") => {
   return fallback;
 };
 
+const videoExtensionForUrl = (url) => (url.includes(".m3u8") ? "m3u8" : "mp4");
+
 const filenameFor = (platform, id, index, type, title) => {
   const base = String(title || `${platform}-${id}`)
     .toLowerCase()
@@ -74,6 +76,14 @@ const isFacebookUrl = (value) =>
   isUrlForHost(value, (hostname) =>
     /(^|\.)((facebook\.com)|(fb\.watch)|(m\.facebook\.com)|(web\.facebook\.com))$/i.test(hostname)
   );
+
+const isFacebookStoryUrl = (value) => {
+  try {
+    return new URL(value).pathname.includes("/stories/");
+  } catch {
+    return false;
+  }
+};
 
 const makeInstagramId = (url) => {
   const match = url.match(/instagram\.com\/(?:reel|p|tv)\/([^/?#]+)/i);
@@ -150,13 +160,24 @@ const extractFacebookUrls = (html) => {
     /"browser_native_hd_url"\s*:\s*"([^"]+)"/g,
     /"browser_native_sd_url"\s*:\s*"([^"]+)"/g,
     /"playable_url_quality_hd"\s*:\s*"([^"]+)"/g,
+    /"playable_url_dash"\s*:\s*"([^"]+)"/g,
     /"playable_url"\s*:\s*"([^"]+)"/g,
+    /"preferred_thumbnail"\s*:\s*\{[^}]*"uri"\s*:\s*"([^"]+)"/g,
+    /"thumbnailImage"\s*:\s*\{[^}]*"uri"\s*:\s*"([^"]+)"/g,
     /"hd_src"\s*:\s*"([^"]+)"/g,
     /"sd_src"\s*:\s*"([^"]+)"/g,
+    /"hd_src_no_ratelimit"\s*:\s*"([^"]+)"/g,
+    /"sd_src_no_ratelimit"\s*:\s*"([^"]+)"/g,
     /hd_src_no_ratelimit:"([^"]+)"/g,
     /sd_src_no_ratelimit:"([^"]+)"/g,
+    /https?:\\\/\\\/[^"'<>]+?\.m3u8[^"'<>]*/g,
     /https?:\\\/\\\/[^"'<>]+?\.mp4[^"'<>]*/g,
+    /https?:\\\/\\\/[^"'<>]+?\.jpg[^"'<>]*/g,
+    /https?:\\\/\\\/[^"'<>]+?\.webp[^"'<>]*/g,
+    /https?:\/\/[^"'<>]+?\.m3u8[^"'<>]*/g,
     /https?:\/\/[^"'<>]+?\.mp4[^"'<>]*/g,
+    /https?:\/\/[^"'<>]+?\.jpg[^"'<>]*/g,
+    /https?:\/\/[^"'<>]+?\.webp[^"'<>]*/g,
   ];
 
   const urls = [];
@@ -169,6 +190,26 @@ const extractFacebookUrls = (html) => {
   }
 
   return unique(urls);
+};
+
+const splitFacebookMediaUrls = (urls) => {
+  const videoUrls = [];
+  const imageUrls = [];
+
+  urls.forEach((url) => {
+    if (/\.(mp4|m3u8)(\?|$)/i.test(url)) {
+      videoUrls.push(url);
+      return;
+    }
+    if (/\.(jpg|jpeg|png|webp)(\?|$)/i.test(url)) {
+      imageUrls.push(url);
+    }
+  });
+
+  return {
+    videoUrls: unique(videoUrls),
+    imageUrls: unique(imageUrls),
+  };
 };
 
 const refererForMediaUrl = (url) => {
@@ -367,10 +408,27 @@ const extractFacebook = async (sourceUrl) => {
 
   const html = await response.text();
   const resolvedUrl = response.url || sourceUrl;
-  const videoUrls = extractFacebookUrls(html);
+  const redirectedToLogin =
+    /\/login(\.php)?/i.test(resolvedUrl) ||
+    /id=["']login_form["']|name=["']login["']|Log in to Facebook|Đăng nhập Facebook/i.test(html);
+
+  if (redirectedToLogin) {
+    if (isFacebookStoryUrl(sourceUrl)) {
+      throw new Error(
+        "Facebook Story/highlight này cần đăng nhập để xem. Server hiện chưa có cookie phiên Facebook nên không thể lấy media."
+      );
+    }
+    throw new Error(
+      "Facebook yêu cầu đăng nhập cho link này. Hãy dùng link public hoặc cấu hình cookie phiên Facebook."
+    );
+  }
+
+  const allMediaUrls = extractFacebookUrls(html);
+  const { videoUrls, imageUrls } = splitFacebookMediaUrls(allMediaUrls);
   const cover =
     getMetaContent(html, "og:image") ||
     getMetaContent(html, "twitter:image") ||
+    imageUrls[0] ||
     "/ver-bigger-logo.png";
   const title =
     getMetaContent(html, "og:title") ||
@@ -388,7 +446,9 @@ const extractFacebook = async (sourceUrl) => {
     type: "video",
     url,
     thumbnail: cover,
-    filename: filenameFor("facebook", id, index, "video", title),
+    filename: sanitizeFilename(
+      `facebook-${id}-${index + 1}.${videoExtensionForUrl(url)}`
+    ),
   }));
 
   const ogVideo = getMetaContent(html, "og:video");
@@ -402,17 +462,29 @@ const extractFacebook = async (sourceUrl) => {
     });
   }
 
-  if (!media.length && cover && cover !== "/ver-bigger-logo.png") {
-    media.push({
-      id: `${id}-image-1`,
-      type: "image",
-      url: cover,
-      thumbnail: cover,
-      filename: filenameFor("facebook", id, 0, "image", title),
+  const fallbackImages = unique([
+    ...imageUrls,
+    cover && cover !== "/ver-bigger-logo.png" ? cover : "",
+  ]);
+
+  if (!media.length && fallbackImages.length) {
+    fallbackImages.slice(0, 6).forEach((url, index) => {
+      media.push({
+        id: `${id}-image-${index + 1}`,
+        type: "image",
+        url,
+        thumbnail: url,
+        filename: filenameFor("facebook", id, index, "image", title),
+      });
     });
   }
 
   if (!media.length) {
+    if (isFacebookStoryUrl(sourceUrl)) {
+      throw new Error(
+        "Facebook Story không trả media cho server chưa đăng nhập. Story/reel highlight thường cần cookie phiên Facebook có quyền xem."
+      );
+    }
     throw new Error(
       "Facebook không trả dữ liệu media cho link này. Hãy kiểm tra link có public không, không phải private/group/story/deleted, rồi thử lại."
     );
