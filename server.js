@@ -419,6 +419,60 @@ const streamYouTubeWithYtDlp = (videoId, filename, res) =>
     });
   });
 
+const getYouTubeInfoWithYtDlp = (sourceUrl) =>
+  new Promise((resolve, reject) => {
+    const child = spawn(
+      "yt-dlp",
+      [
+        "--dump-single-json",
+        "--no-playlist",
+        "--no-warnings",
+        "--skip-download",
+        sourceUrl,
+      ],
+      { windowsHide: true }
+    );
+    const stdout = [];
+    const stderr = [];
+
+    child.stdout.on("data", (chunk) => stdout.push(chunk));
+    child.stderr.on("data", (chunk) => stderr.push(chunk));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      const output = Buffer.concat(stdout).toString("utf8").trim();
+      if (code !== 0) {
+        reject(
+          new Error(
+            Buffer.concat(stderr).toString("utf8").trim() ||
+              `yt-dlp exited with status ${code}`
+          )
+        );
+        return;
+      }
+
+      try {
+        resolve(JSON.parse(output));
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
+
+const chooseYouTubeYtDlpFormat = (formats = []) => {
+  const progressive = formats
+    .filter(
+      (format) =>
+        format.vcodec &&
+        format.vcodec !== "none" &&
+        format.acodec &&
+        format.acodec !== "none" &&
+        format.ext === "mp4"
+    )
+    .sort((a, b) => (toNumber(b.height) || 0) - (toNumber(a.height) || 0));
+
+  return progressive[0] || formats.find((format) => format.format_id === "18");
+};
+
 const extractInstagram = async (sourceUrl) => {
   if (!isInstagramUrl(sourceUrl)) {
     const error = new Error("Vui lòng nhập link Instagram hợp lệ.");
@@ -741,48 +795,40 @@ const extractYouTube = async (sourceUrl) => {
     throw error;
   }
 
-  const info = await ytdl.getInfo(sourceUrl, {
-    requestOptions: {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-      },
-    },
-  });
-
-  const details = info.videoDetails;
-  const selectedFormat = chooseYouTubeFormat(info.formats);
+  const info = await getYouTubeInfoWithYtDlp(sourceUrl);
+  const selectedFormat = chooseYouTubeYtDlpFormat(info.formats);
   if (!selectedFormat) {
     throw new Error("Không tìm thấy định dạng tải phù hợp cho video YouTube này.");
   }
 
-  const thumbnails = Array.isArray(details.thumbnails) ? details.thumbnails : [];
+  const thumbnails = Array.isArray(info.thumbnails) ? info.thumbnails : [];
   const cover =
+    info.thumbnail ||
     thumbnails.slice().sort((a, b) => (b.width || 0) - (a.width || 0))[0]?.url ||
     "/ver-bigger-logo.png";
-  const id = details.videoId || ytdl.getURLVideoID(sourceUrl);
+  const id = info.id || ytdl.getURLVideoID(sourceUrl);
   const filename = sanitizeFilename(
-    `youtube-${id}-${selectedFormat.qualityLabel || selectedFormat.itag}.mp4`
+    `youtube-${id}-${selectedFormat.format_note || selectedFormat.format_id}.mp4`
   );
 
   return {
     platform: "youtube",
     id,
-    sourceUrl: details.video_url || sourceUrl,
-    title: details.title || "YouTube video",
+    sourceUrl: info.webpage_url || `https://www.youtube.com/watch?v=${id}`,
+    title: info.title || "YouTube video",
     cover,
     author: {
-      id: details.author?.id || details.ownerChannelName || "youtube",
-      unique_id: details.author?.user || details.ownerChannelName || "youtube",
-      nickname: details.author?.name || details.ownerChannelName || "YouTube",
+      id: info.channel_id || info.uploader_id || info.channel || "youtube",
+      unique_id: info.uploader_id || info.channel || info.uploader || "youtube",
+      nickname: info.uploader || info.channel || "YouTube",
       avatar: "/ver-bigger-logo.png",
-      verified: Boolean(details.author?.verified),
+      verified: Boolean(info.channel_is_verified),
     },
     media: [
       {
-        id: `${id}-${selectedFormat.itag}`,
+        id: `${id}-${selectedFormat.format_id}`,
         type: "video",
-        url: `youtube:${id}:${selectedFormat.itag}`,
+        url: `youtube:${id}:${selectedFormat.format_id}`,
         thumbnail: cover,
         filename,
         width: toNumber(selectedFormat.width),
