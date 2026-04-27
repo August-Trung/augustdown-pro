@@ -12,6 +12,7 @@ import ytdl from "@distube/ytdl-core";
 const app = express();
 const port = Number(process.env.PORT || 8788);
 const facebookCookiePath = path.join(process.cwd(), "facebook-cookie.local");
+const youtubeCookiePath = path.join(process.cwd(), "youtube-cookie.local");
 
 const findAria2Path = () => {
   const envPath = process.env.ARIA2C_PATH;
@@ -422,13 +423,33 @@ const parseYouTubeDownloadToken = (value) => {
   };
 };
 
+const getYouTubeCookie = () => {
+  const envCookie = normalizeCookie(process.env.YOUTUBE_COOKIE || "");
+  if (envCookie) return envCookie;
+
+  try {
+    return normalizeCookie(fs.readFileSync(youtubeCookiePath, "utf8"));
+  } catch {
+    return "";
+  }
+};
+
+const hasUsableYouTubeCookie = (cookie) =>
+  /(?:^|;\s*)VISITOR_INFO1_LIVE=/.test(cookie) ||
+  /(?:^|;\s*)__Secure-/.test(cookie) ||
+  /(?:^|;\s*)SID=/.test(cookie) ||
+  /(?:^|;\s*)LOGIN_INFO=/.test(cookie);
+
 const youtubeYtDlpArgs = (videoId, format, tempPath) => {
   const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
+  const cookie = getYouTubeCookie();
+  const cookieArgs = cookie ? ["--add-header", `Cookie:${cookie}`] : [];
   if (format === "mp3") {
     return [
       "--newline",
       "--no-playlist",
       "--no-warnings",
+      ...cookieArgs,
       "--http-chunk-size",
       "10M",
       "--retries",
@@ -449,6 +470,7 @@ const youtubeYtDlpArgs = (videoId, format, tempPath) => {
     "--newline",
     "--no-playlist",
     "--no-warnings",
+    ...cookieArgs,
     "--http-chunk-size",
     "10M",
     "--retries",
@@ -661,12 +683,14 @@ const streamYouTubeWithYtDlp = (videoId, format, filename, res) =>
 
 const getYouTubeInfoWithYtDlp = (sourceUrl) =>
   new Promise((resolve, reject) => {
+    const cookie = getYouTubeCookie();
     const child = spawn(
       "yt-dlp",
       [
         "--dump-single-json",
         "--no-playlist",
         "--no-warnings",
+        ...(cookie ? ["--add-header", `Cookie:${cookie}`] : []),
         "--skip-download",
         sourceUrl,
       ],
@@ -1349,6 +1373,38 @@ app.delete("/api/facebook/session", (_req, res) => {
     // File is optional.
   }
   res.json({ code: 0, configured: Boolean(process.env.FACEBOOK_COOKIE) });
+});
+
+app.get("/api/youtube/session", (_req, res) => {
+  const cookie = getYouTubeCookie();
+  res.json({
+    code: 0,
+    configured: hasUsableYouTubeCookie(cookie),
+    source: process.env.YOUTUBE_COOKIE ? "env" : cookie ? "local" : "none",
+  });
+});
+
+app.post("/api/youtube/session", (req, res) => {
+  const cookie = normalizeCookie(req.body?.cookie || "");
+
+  if (!hasUsableYouTubeCookie(cookie)) {
+    return res.status(400).json({
+      code: 1,
+      msg: "Cookie YouTube không hợp lệ. Hãy dán raw cookie hoặc JSON export từ youtube.com.",
+    });
+  }
+
+  fs.writeFileSync(youtubeCookiePath, cookie, "utf8");
+  res.json({ code: 0, configured: true });
+});
+
+app.delete("/api/youtube/session", (_req, res) => {
+  try {
+    fs.rmSync(youtubeCookiePath, { force: true });
+  } catch {
+    // File is optional.
+  }
+  res.json({ code: 0, configured: Boolean(process.env.YOUTUBE_COOKIE) });
 });
 
 app.post("/api/extract", async (req, res) => {

@@ -60,3 +60,41 @@ export const clearFacebookSession = async (): Promise<void> => {
     throw new Error(data.msg || "Could not clear Facebook session");
   }
 };
+
+export const fetchYouTubeSession = async (): Promise<{
+  configured: boolean;
+  source: string;
+}> => {
+  const response = await fetch("/api/youtube/session");
+  const data = await response.json();
+  if (!response.ok || data.code !== 0) {
+    throw new Error(data.msg || "Could not read YouTube session");
+  }
+  return data;
+};
+
+export const saveYouTubeSession = async (cookie: string): Promise<void> => {
+  const response = await fetch("/api/youtube/session", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ cookie }),
+  });
+
+  const data = await response.json();
+  if (!response.ok || data.code !== 0) {
+    throw new Error(data.msg || "Could not save YouTube session");
+  }
+};
+
+export const clearYouTubeSession = async (): Promise<void> => {
+  const response = await fetch("/api/youtube/session", {
+    method: "DELETE",
+  });
+
+  const data = await response.json();
+  if (!response.ok || data.code !== 0) {
+    throw new Error(data.msg || "Could not clear YouTube session");
+  }
+};
