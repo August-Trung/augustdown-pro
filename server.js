@@ -398,7 +398,9 @@ const streamYouTubeWithYtDlp = (videoId, format, filename, res) =>
           "--no-playlist",
           "--no-warnings",
           "--format",
-          `${format}/18/best[ext=mp4][vcodec!=none][acodec!=none]/best[vcodec!=none][acodec!=none]`,
+          `bestvideo[height<=${format}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=${format}]+bestaudio/best[height<=${format}][ext=mp4][vcodec!=none][acodec!=none]/18`,
+          "--merge-output-format",
+          "mp4",
           "--output",
           "-",
           watchUrl,
@@ -500,8 +502,6 @@ const getYouTubeDownloadOptions = (info, cover) => {
         format.format_id &&
         format.vcodec &&
         format.vcodec !== "none" &&
-        format.acodec &&
-        format.acodec !== "none" &&
         format.ext === "mp4" &&
         toNumber(format.height)
     )
@@ -513,14 +513,15 @@ const getYouTubeDownloadOptions = (info, cover) => {
     const height = toNumber(format.height);
     if (!height || seenHeights.has(height)) continue;
     seenHeights.add(height);
+    const hasAudio = format.acodec && format.acodec !== "none";
     const label = `MP4 ${format.format_note || `${height}p`}`;
     media.push({
-      id: `${id}-${format.format_id}`,
+      id: `${id}-${height}p`,
       type: "video",
-      url: `youtube:${id}:${format.format_id}`,
+      url: `youtube:${id}:${height}`,
       thumbnail: cover,
       filename: sanitizeFilename(`youtube-${id}-${height}p.mp4`),
-      label,
+      label: hasAudio ? label : `${label} + audio`,
       width: toNumber(format.width),
       height,
     });
