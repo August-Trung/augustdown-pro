@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import { instagramGetUrl } from "instagram-url-direct";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { Readable } from "node:stream";
@@ -48,6 +49,14 @@ const youtubeDownloaderArgs = aria2Path
       "aria2c:-x 16 -s 16 -k 1M --file-allocation=none",
     ]
   : [];
+
+const makeTempDownloadPath = (videoId, extension) =>
+  path.join(
+    os.tmpdir(),
+    `augustdown-${videoId}-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2)}.${extension}`
+  );
 
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
@@ -415,6 +424,7 @@ const streamYouTubeWithYtDlp = (videoId, format, filename, res) =>
   new Promise((resolve, reject) => {
     const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
     const isAudio = format === "mp3";
+    const tempPath = makeTempDownloadPath(videoId, isAudio ? "mp3" : "mp4");
     const args = isAudio
       ? [
           "--quiet",
@@ -432,7 +442,7 @@ const streamYouTubeWithYtDlp = (videoId, format, filename, res) =>
           "--audio-quality",
           "0",
           "--output",
-          "-",
+          tempPath,
           watchUrl,
         ]
       : [
@@ -450,7 +460,7 @@ const streamYouTubeWithYtDlp = (videoId, format, filename, res) =>
           "--merge-output-format",
           "mp4",
           "--output",
-          "-",
+          tempPath,
           watchUrl,
         ];
     const child = spawn(
@@ -460,31 +470,42 @@ const streamYouTubeWithYtDlp = (videoId, format, filename, res) =>
     );
     const stderr = [];
 
-    res.setHeader("Content-Type", isAudio ? "audio/mpeg" : "video/mp4");
-    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-    res.setHeader("Cache-Control", "private, max-age=0, no-store");
-
     child.stderr.on("data", (chunk) => {
       stderr.push(chunk.toString());
     });
 
     child.on("error", reject);
-    child.stdout.on("error", reject);
     res.on("close", () => {
       if (!res.writableEnded && !child.killed) child.kill();
     });
 
-    child.stdout.pipe(res);
     child.on("close", (code) => {
-      if (code === 0 || res.writableEnded) {
-        resolve();
+      if (code !== 0) {
+        fs.rm(tempPath, { force: true }, () => {});
+        reject(
+          new Error(
+            stderr.join("").trim() || `yt-dlp exited with status ${code}`
+          )
+        );
         return;
       }
-      reject(
-        new Error(
-          stderr.join("").trim() || `yt-dlp exited with status ${code}`
-        )
-      );
+
+      res.setHeader("Content-Type", isAudio ? "audio/mpeg" : "video/mp4");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      res.setHeader("Cache-Control", "private, max-age=0, no-store");
+      try {
+        res.setHeader("Content-Length", fs.statSync(tempPath).size);
+      } catch {
+        // Content-Length is optional.
+      }
+
+      const output = fs.createReadStream(tempPath);
+      output.on("error", reject);
+      output.on("close", () => {
+        fs.rm(tempPath, { force: true }, () => {});
+      });
+      output.pipe(res);
+      output.on("end", resolve);
     });
   });
 
