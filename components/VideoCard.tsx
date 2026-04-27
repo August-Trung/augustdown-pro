@@ -9,6 +9,7 @@ interface VideoCardProps {
 
 const VideoCard: React.FC<VideoCardProps> = ({ data, t }) => {
   const [localDownloading, setLocalDownloading] = useState<string | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState("");
   const [selected, setSelected] = useState(data.media[0]);
   const isYouTube = data.platform === "youtube";
   const isProxyToken = selected.url.startsWith("youtube:");
@@ -19,12 +20,27 @@ const VideoCard: React.FC<VideoCardProps> = ({ data, t }) => {
 
   const handleDownload = async (item: MediaItem) => {
     setLocalDownloading(item.id);
+    setDownloadProgress("");
     try {
-      await downloadMediaFile(item.url, item.filename);
+      await downloadMediaFile(item.url, item.filename, (status) => {
+        const progress =
+          typeof status.progress === "number" && status.progress > 0
+            ? `${Math.floor(status.progress)}%`
+            : "";
+        const speed = status.speed ? ` · ${status.speed}` : "";
+        const phase =
+          status.phase === "merging"
+            ? "Đang ghép"
+            : status.phase === "downloading"
+              ? "Đang tải"
+              : "Đang chuẩn bị";
+        setDownloadProgress(`${phase}${progress ? ` ${progress}` : ""}${speed}`);
+      });
     } catch (error) {
       console.error(error);
     } finally {
       setLocalDownloading(null);
+      setDownloadProgress("");
     }
   };
 
@@ -195,7 +211,7 @@ const VideoCard: React.FC<VideoCardProps> = ({ data, t }) => {
               )}
               {localDownloading === selected.id
                 ? isYouTube
-                  ? t.preparingDownload
+                  ? downloadProgress || t.preparingDownload
                   : t.processing
                 : isYouTube
                   ? t.btnDownloadSelected

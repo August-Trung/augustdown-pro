@@ -426,8 +426,7 @@ const youtubeYtDlpArgs = (videoId, format, tempPath) => {
   const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
   if (format === "mp3") {
     return [
-      "--quiet",
-      "--no-progress",
+      "--newline",
       "--no-playlist",
       "--no-warnings",
       "--http-chunk-size",
@@ -447,8 +446,7 @@ const youtubeYtDlpArgs = (videoId, format, tempPath) => {
   }
 
   return [
-    "--quiet",
-    "--no-progress",
+    "--newline",
     "--no-playlist",
     "--no-warnings",
     "--http-chunk-size",
@@ -499,6 +497,9 @@ const createYouTubePrepareJob = (videoId, format, filename) => {
     startedAt: Date.now(),
     readyAt: null,
     error: "",
+    progress: 0,
+    speed: "",
+    phase: "starting",
   };
 
   youtubeJobs.set(id, job);
@@ -507,7 +508,23 @@ const createYouTubePrepareJob = (videoId, format, filename) => {
   });
   const stderr = [];
 
-  child.stderr.on("data", (chunk) => stderr.push(chunk.toString()));
+  const handleProgress = (chunk) => {
+    const text = chunk.toString();
+    stderr.push(text);
+    const percentMatch = text.match(/(\d+(?:\.\d+)?)%/);
+    const speedMatch = text.match(/\bat\s+([^\s]+\/s)/);
+    if (percentMatch) {
+      job.progress = Math.max(job.progress, Number(percentMatch[1]));
+      job.phase = "downloading";
+    }
+    if (speedMatch) job.speed = speedMatch[1];
+    if (/merg|ffmpeg|converting|destination/i.test(text)) {
+      job.phase = /merg|ffmpeg|converting/i.test(text) ? "merging" : job.phase;
+    }
+  };
+
+  child.stdout.on("data", handleProgress);
+  child.stderr.on("data", handleProgress);
   child.on("error", (error) => {
     job.status = "error";
     job.error = error?.message || "Không thể chuẩn bị file YouTube.";
@@ -1166,6 +1183,9 @@ app.get("/api/youtube/jobs/:id", (req, res) => {
     error: job.error,
     elapsedSeconds: Math.round((Date.now() - job.startedAt) / 1000),
     bytes,
+    progress: job.progress,
+    speed: job.speed,
+    phase: job.phase,
     downloadUrl:
       job.status === "ready" ? `/api/youtube/jobs/${job.id}/download` : "",
   });
