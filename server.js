@@ -1,14 +1,17 @@
 import express from "express";
 import cors from "cors";
 import { instagramGetUrl } from "instagram-url-direct";
+import fs from "node:fs";
+import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
 const app = express();
 const port = Number(process.env.PORT || 8788);
+const facebookCookiePath = path.join(process.cwd(), "facebook-cookie.local");
 
 app.use(cors());
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "2mb" }));
 
 const supportedPlatforms = new Set(["instagram", "tiktok", "facebook"]);
 
@@ -109,6 +112,36 @@ const ok = (data, startedAt) => ({
   msg: "success",
   processed_time: (Date.now() - startedAt) / 1000,
   data,
+});
+
+const normalizeCookie = (value = "") =>
+  String(value)
+    .replace(/\r?\n/g, " ")
+    .replace(/\s*;\s*/g, "; ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const getFacebookCookie = () => {
+  const envCookie = normalizeCookie(process.env.FACEBOOK_COOKIE || "");
+  if (envCookie) return envCookie;
+
+  try {
+    return normalizeCookie(fs.readFileSync(facebookCookiePath, "utf8"));
+  } catch {
+    return "";
+  }
+};
+
+const hasUsableFacebookCookie = (cookie) =>
+  /(?:^|;\s*)c_user=/.test(cookie) && /(?:^|;\s*)xs=/.test(cookie);
+
+const facebookHeaders = (cookie = "") => ({
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+  "Accept-Language": "vi,en-US;q=0.9,en;q=0.8",
+  Accept:
+    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+  ...(cookie ? { Cookie: cookie } : {}),
 });
 
 const publicInstagramError =
@@ -217,6 +250,15 @@ const refererForMediaUrl = (url) => {
   if (/tik/i.test(url)) return "https://www.tiktok.com/";
   return "https://www.instagram.com/";
 };
+
+const mediaHeaders = (url) => ({
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+  Referer: refererForMediaUrl(url),
+  ...(/facebook|fbcdn|fbsbx/i.test(url) && getFacebookCookie()
+    ? { Cookie: getFacebookCookie() }
+    : {}),
+});
 
 const extractInstagram = async (sourceUrl) => {
   if (!isInstagramUrl(sourceUrl)) {
@@ -391,15 +433,11 @@ const extractFacebook = async (sourceUrl) => {
     throw error;
   }
 
+  const facebookCookie = getFacebookCookie();
+  const hasCookie = hasUsableFacebookCookie(facebookCookie);
   const response = await fetch(sourceUrl, {
     redirect: "follow",
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-      "Accept-Language": "vi,en-US;q=0.9,en;q=0.8",
-      Accept:
-        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    },
+    headers: facebookHeaders(facebookCookie),
   });
 
   if (!response.ok) {
@@ -413,6 +451,13 @@ const extractFacebook = async (sourceUrl) => {
     /id=["']login_form["']|name=["']login["']|Log in to Facebook|Đăng nhập Facebook/i.test(html);
 
   if (redirectedToLogin) {
+    if (!hasCookie) {
+      throw new Error(
+        isFacebookStoryUrl(sourceUrl)
+          ? "Facebook Story/highlight cần cookie phiên Facebook. Hãy lưu cookie Facebook trong phần cấu hình rồi thử lại."
+          : "Facebook yêu cầu đăng nhập cho link này. Hãy lưu cookie Facebook trong phần cấu hình."
+      );
+    }
     if (isFacebookStoryUrl(sourceUrl)) {
       throw new Error(
         "Facebook Story/highlight này cần đăng nhập để xem. Server hiện chưa có cookie phiên Facebook nên không thể lấy media."
@@ -481,6 +526,11 @@ const extractFacebook = async (sourceUrl) => {
 
   if (!media.length) {
     if (isFacebookStoryUrl(sourceUrl)) {
+      if (!hasCookie) {
+        throw new Error(
+          "Facebook Story/highlight cần cookie phiên Facebook. Hãy lưu cookie Facebook trong phần cấu hình rồi thử lại."
+        );
+      }
       throw new Error(
         "Facebook Story không trả media cho server chưa đăng nhập. Story/reel highlight thường cần cookie phiên Facebook có quyền xem."
       );
@@ -544,11 +594,7 @@ app.get("/api/download", async (req, res) => {
 
   try {
     const upstream = await fetch(url, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        Referer: refererForMediaUrl(url),
-      },
+      headers: mediaHeaders(url),
     });
 
     if (!upstream.ok || !upstream.body) {
@@ -592,11 +638,7 @@ app.get("/api/preview", async (req, res) => {
 
   try {
     const upstream = await fetch(url, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        Referer: refererForMediaUrl(url),
-      },
+      headers: mediaHeaders(url),
     });
 
     if (!upstream.ok || !upstream.body) {
@@ -622,6 +664,38 @@ app.get("/api/preview", async (req, res) => {
       res.destroy(error);
     }
   }
+});
+
+app.get("/api/facebook/session", (_req, res) => {
+  const cookie = getFacebookCookie();
+  res.json({
+    code: 0,
+    configured: hasUsableFacebookCookie(cookie),
+    source: process.env.FACEBOOK_COOKIE ? "env" : cookie ? "local" : "none",
+  });
+});
+
+app.post("/api/facebook/session", (req, res) => {
+  const cookie = normalizeCookie(req.body?.cookie || "");
+
+  if (!hasUsableFacebookCookie(cookie)) {
+    return res.status(400).json({
+      code: 1,
+      msg: "Cookie Facebook cần có ít nhất c_user và xs.",
+    });
+  }
+
+  fs.writeFileSync(facebookCookiePath, cookie, "utf8");
+  res.json({ code: 0, configured: true });
+});
+
+app.delete("/api/facebook/session", (_req, res) => {
+  try {
+    fs.rmSync(facebookCookiePath, { force: true });
+  } catch {
+    // File is optional.
+  }
+  res.json({ code: 0, configured: Boolean(process.env.FACEBOOK_COOKIE) });
 });
 
 app.post("/api/extract", async (req, res) => {

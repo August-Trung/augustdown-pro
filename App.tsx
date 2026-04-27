@@ -5,7 +5,12 @@ import Navbar from "./components/Navbar";
 import VideoCard from "./components/VideoCard";
 import { ExtractedMediaData, Platform } from "./types";
 import { downloadMediaFile } from "./services/downloadService";
-import { fetchExtractedMedia } from "./services/extractService";
+import {
+  clearFacebookSession,
+  fetchExtractedMedia,
+  fetchFacebookSession,
+  saveFacebookSession,
+} from "./services/extractService";
 
 const platforms: { id: Platform; label: string; status?: "soon" | "experimental" }[] = [
   { id: "instagram", label: "Instagram" },
@@ -50,6 +55,12 @@ const translations = {
     comingSoon: "Coming soon",
     experimental: "Experimental",
     unsupported: "This platform is not ready yet.",
+    fbCookieTitle: "Facebook session",
+    fbCookieReady: "Cookie saved",
+    fbCookieMissing: "Cookie required for Story/highlight",
+    fbCookiePlaceholder: "Paste Facebook cookie here: c_user=...; xs=...;",
+    fbCookieSave: "Save cookie",
+    fbCookieClear: "Clear",
   },
   vi: {
     title: "AugustDown Pro",
@@ -85,6 +96,12 @@ const translations = {
     comingSoon: "Sắp có",
     experimental: "Thử nghiệm",
     unsupported: "Nền tảng này chưa sẵn sàng.",
+    fbCookieTitle: "Phiên Facebook",
+    fbCookieReady: "Đã lưu cookie",
+    fbCookieMissing: "Story/highlight cần cookie",
+    fbCookiePlaceholder: "Dán cookie Facebook tại đây: c_user=...; xs=...;",
+    fbCookieSave: "Lưu cookie",
+    fbCookieClear: "Xóa",
   },
 };
 
@@ -101,6 +118,9 @@ const App: React.FC = () => {
   const [history, setHistory] = useState<ExtractedMediaData[]>([]);
   const [isDonateOpen, setIsDonateOpen] = useState(false);
   const [showPasteToast, setShowPasteToast] = useState(false);
+  const [facebookCookie, setFacebookCookie] = useState("");
+  const [facebookCookieSaved, setFacebookCookieSaved] = useState(false);
+  const [savingFacebookCookie, setSavingFacebookCookie] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const t = translations[lang];
 
@@ -113,6 +133,12 @@ const App: React.FC = () => {
     } catch {
       localStorage.removeItem(historyKey);
     }
+  }, []);
+
+  useEffect(() => {
+    fetchFacebookSession()
+      .then((session) => setFacebookCookieSaved(session.configured))
+      .catch(() => setFacebookCookieSaved(false));
   }, []);
 
   const resetApp = () => {
@@ -219,6 +245,34 @@ const App: React.FC = () => {
     localStorage.removeItem(historyKey);
   };
 
+  const handleSaveFacebookCookie = async () => {
+    setSavingFacebookCookie(true);
+    setError(null);
+    try {
+      await saveFacebookSession(facebookCookie);
+      setFacebookCookie("");
+      setFacebookCookieSaved(true);
+    } catch (err: any) {
+      setError(err?.message || t.error);
+    } finally {
+      setSavingFacebookCookie(false);
+    }
+  };
+
+  const handleClearFacebookCookie = async () => {
+    setSavingFacebookCookie(true);
+    setError(null);
+    try {
+      await clearFacebookSession();
+      setFacebookCookie("");
+      setFacebookCookieSaved(false);
+    } catch (err: any) {
+      setError(err?.message || t.error);
+    } finally {
+      setSavingFacebookCookie(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[#07080c] text-white selection:bg-rose-500/30 pb-20">
       <Navbar
@@ -266,6 +320,49 @@ const App: React.FC = () => {
               ))}
             </div>
           </div>
+
+          {platform === "facebook" && (
+            <div className="max-w-2xl mx-auto mb-3 p-3 rounded-xl bg-zinc-950/80 border border-white/10">
+              <div className="flex items-center justify-between gap-3 mb-2">
+                <div>
+                  <div className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-500">
+                    {t.fbCookieTitle}
+                  </div>
+                  <div
+                    className={`mt-1 text-[10px] font-bold ${
+                      facebookCookieSaved ? "text-emerald-400" : "text-amber-300"
+                    }`}
+                  >
+                    {facebookCookieSaved ? t.fbCookieReady : t.fbCookieMissing}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleClearFacebookCookie}
+                  disabled={savingFacebookCookie || !facebookCookieSaved}
+                  className="px-3 py-2 rounded-lg bg-zinc-900 text-zinc-400 hover:text-white border border-white/10 text-[10px] font-black uppercase tracking-widest disabled:opacity-40"
+                >
+                  {t.fbCookieClear}
+                </button>
+              </div>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <textarea
+                  value={facebookCookie}
+                  onChange={(event) => setFacebookCookie(event.target.value)}
+                  placeholder={t.fbCookiePlaceholder}
+                  className="min-h-[72px] sm:min-h-10 flex-1 bg-black/60 border border-white/10 rounded-lg px-3 py-2 text-xs text-white placeholder:text-zinc-600 focus:outline-none focus:border-rose-500/50 resize-y"
+                />
+                <button
+                  type="button"
+                  onClick={handleSaveFacebookCookie}
+                  disabled={savingFacebookCookie || !facebookCookie.trim()}
+                  className="px-5 py-2 rounded-lg bg-white text-black text-[10px] font-black uppercase tracking-widest disabled:opacity-50"
+                >
+                  {savingFacebookCookie ? t.processing : t.fbCookieSave}
+                </button>
+              </div>
+            </div>
+          )}
 
           <form onSubmit={handleFetch} className="relative group max-w-2xl mx-auto">
             <div className="absolute -inset-0.5 bg-gradient-to-r from-rose-500 via-amber-400 to-sky-500 rounded-xl blur opacity-20 group-focus-within:opacity-40 transition duration-500" />
