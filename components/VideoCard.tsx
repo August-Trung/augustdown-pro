@@ -194,7 +194,9 @@ const VideoCard: React.FC<VideoCardProps> = ({ data, t }) => {
                 <div className="w-3.5 h-3.5 border-2 border-black/20 border-t-black rounded-full animate-spin" />
               )}
               {localDownloading === selected.id
-                ? t.processing
+                ? isYouTube
+                  ? t.preparingDownload
+                  : t.processing
                 : isYouTube
                   ? t.btnDownloadSelected
                   : t.btnNoWm}
