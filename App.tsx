@@ -16,7 +16,7 @@ const platforms: { id: Platform; label: string; status?: "soon" | "experimental"
   { id: "instagram", label: "Instagram" },
   { id: "tiktok", label: "TikTok" },
   { id: "facebook", label: "Facebook" },
-  { id: "youtube", label: "YouTube", status: "soon" },
+  { id: "youtube", label: "YouTube" },
   { id: "twitter", label: "X/Twitter", status: "soon" },
 ];
 
@@ -37,7 +37,7 @@ const translations = {
     btnWm: "Open Source",
     btnAudio: "Copy Link",
     f1Title: "Multi Platform",
-    f1Desc: "Instagram, TikTok, and public Facebook links are ready behind the same API.",
+    f1Desc: "Instagram, TikTok, Facebook, and YouTube links are ready behind the same API.",
     f2Title: "Server Download",
     f2Desc: "Files download through /api/download so CDN tabs are not opened automatically.",
     f3Title: "Unified Output",
@@ -79,7 +79,7 @@ const translations = {
     btnWm: "Mở link gốc",
     btnAudio: "Copy link",
     f1Title: "Nhiều nền tảng",
-    f1Desc: "Instagram, TikTok và link Facebook công khai đã sẵn sàng trong cùng một API.",
+    f1Desc: "Instagram, TikTok, Facebook và YouTube đã sẵn sàng trong cùng một API.",
     f2Title: "Tải qua server",
     f2Desc: "File luôn tải qua /api/download, không tự mở tab CDN.",
     f3Title: "Dữ liệu thống nhất",

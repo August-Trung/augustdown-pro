@@ -3,8 +3,10 @@ import cors from "cors";
 import { instagramGetUrl } from "instagram-url-direct";
 import fs from "node:fs";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import ytdl from "@distube/ytdl-core";
 
 const app = express();
 const port = Number(process.env.PORT || 8788);
@@ -13,7 +15,7 @@ const facebookCookiePath = path.join(process.cwd(), "facebook-cookie.local");
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 
-const supportedPlatforms = new Set(["instagram", "tiktok", "facebook"]);
+const supportedPlatforms = new Set(["instagram", "tiktok", "facebook", "youtube"]);
 
 const platformLabels = {
   instagram: "Instagram",
@@ -79,6 +81,14 @@ const isFacebookUrl = (value) =>
   isUrlForHost(value, (hostname) =>
     /(^|\.)((facebook\.com)|(fb\.watch)|(m\.facebook\.com)|(web\.facebook\.com))$/i.test(hostname)
   );
+
+const isYouTubeUrl = (value) => {
+  try {
+    return ytdl.validateURL(value);
+  } catch {
+    return false;
+  }
+};
 
 const isFacebookStoryUrl = (value) => {
   try {
@@ -353,6 +363,61 @@ const mediaHeaders = (url) => ({
     ? { Cookie: getFacebookCookie() }
     : {}),
 });
+
+const parseYouTubeDownloadToken = (value) => {
+  const match = String(value || "").match(/^youtube:([^:]+):(\d+)$/);
+  if (!match) return null;
+  return {
+    videoId: match[1],
+    itag: Number(match[2]),
+  };
+};
+
+const streamYouTubeWithYtDlp = (videoId, filename, res) =>
+  new Promise((resolve, reject) => {
+    const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    const child = spawn(
+      "yt-dlp",
+      [
+        "--no-playlist",
+        "--no-warnings",
+        "--format",
+        "18/best[ext=mp4][vcodec!=none][acodec!=none]/best[vcodec!=none][acodec!=none]",
+        "--output",
+        "-",
+        watchUrl,
+      ],
+      { windowsHide: true }
+    );
+    const stderr = [];
+
+    res.setHeader("Content-Type", "video/mp4");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.setHeader("Cache-Control", "private, max-age=0, no-store");
+
+    child.stderr.on("data", (chunk) => {
+      stderr.push(chunk.toString());
+    });
+
+    child.on("error", reject);
+    child.stdout.on("error", reject);
+    res.on("close", () => {
+      if (!res.writableEnded && !child.killed) child.kill();
+    });
+
+    child.stdout.pipe(res);
+    child.on("close", (code) => {
+      if (code === 0 || res.writableEnded) {
+        resolve();
+        return;
+      }
+      reject(
+        new Error(
+          stderr.join("").trim() || `yt-dlp exited with status ${code}`
+        )
+      );
+    });
+  });
 
 const extractInstagram = async (sourceUrl) => {
   if (!isInstagramUrl(sourceUrl)) {
@@ -653,10 +718,85 @@ const extractFacebook = async (sourceUrl) => {
   };
 };
 
+const chooseYouTubeFormat = (formats) => {
+  const progressive = formats
+    .filter((format) => format.hasVideo && format.hasAudio && format.url)
+    .sort((a, b) => {
+      const aHeight = toNumber(a.height) || 0;
+      const bHeight = toNumber(b.height) || 0;
+      return bHeight - aHeight;
+    });
+
+  if (progressive.length) return progressive[0];
+
+  return formats
+    .filter((format) => format.hasVideo && format.url)
+    .sort((a, b) => (toNumber(b.height) || 0) - (toNumber(a.height) || 0))[0];
+};
+
+const extractYouTube = async (sourceUrl) => {
+  if (!isYouTubeUrl(sourceUrl)) {
+    const error = new Error("Vui lòng nhập link YouTube hợp lệ.");
+    error.status = 400;
+    throw error;
+  }
+
+  const info = await ytdl.getInfo(sourceUrl, {
+    requestOptions: {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+      },
+    },
+  });
+
+  const details = info.videoDetails;
+  const selectedFormat = chooseYouTubeFormat(info.formats);
+  if (!selectedFormat) {
+    throw new Error("Không tìm thấy định dạng tải phù hợp cho video YouTube này.");
+  }
+
+  const thumbnails = Array.isArray(details.thumbnails) ? details.thumbnails : [];
+  const cover =
+    thumbnails.slice().sort((a, b) => (b.width || 0) - (a.width || 0))[0]?.url ||
+    "/ver-bigger-logo.png";
+  const id = details.videoId || ytdl.getURLVideoID(sourceUrl);
+  const filename = sanitizeFilename(
+    `youtube-${id}-${selectedFormat.qualityLabel || selectedFormat.itag}.mp4`
+  );
+
+  return {
+    platform: "youtube",
+    id,
+    sourceUrl: details.video_url || sourceUrl,
+    title: details.title || "YouTube video",
+    cover,
+    author: {
+      id: details.author?.id || details.ownerChannelName || "youtube",
+      unique_id: details.author?.user || details.ownerChannelName || "youtube",
+      nickname: details.author?.name || details.ownerChannelName || "YouTube",
+      avatar: "/ver-bigger-logo.png",
+      verified: Boolean(details.author?.verified),
+    },
+    media: [
+      {
+        id: `${id}-${selectedFormat.itag}`,
+        type: "video",
+        url: `youtube:${id}:${selectedFormat.itag}`,
+        thumbnail: cover,
+        filename,
+        width: toNumber(selectedFormat.width),
+        height: toNumber(selectedFormat.height),
+      },
+    ],
+  };
+};
+
 const extractByPlatform = async (platform, url) => {
   if (platform === "instagram") return extractInstagram(url);
   if (platform === "tiktok") return extractTikTok(url);
   if (platform === "facebook") return extractFacebook(url);
+  if (platform === "youtube") return extractYouTube(url);
 
   const label = platformLabels[platform] || platform || "Platform";
   const error = new Error(`${label} đang ở trạng thái coming soon hoặc experimental.`);
@@ -672,7 +812,7 @@ app.get("/api/health", (_req, res) => {
       instagram: "ready",
       tiktok: "ready",
       facebook: "ready",
-      youtube: "coming_soon",
+      youtube: "ready",
       twitter: "coming_soon",
     },
   });
@@ -681,6 +821,24 @@ app.get("/api/health", (_req, res) => {
 app.get("/api/download", async (req, res) => {
   const url = String(req.query.url || "").trim();
   const filename = sanitizeFilename(req.query.filename);
+  const youtubeDownload = parseYouTubeDownloadToken(url);
+
+  if (youtubeDownload) {
+    try {
+      await streamYouTubeWithYtDlp(youtubeDownload.videoId, filename, res);
+      return;
+    } catch (error) {
+      console.error("YouTube download failed:", error);
+      if (!res.headersSent) {
+        return res.status(502).json({
+          code: 1,
+          msg: error?.message || "Không thể tải video YouTube qua server.",
+        });
+      }
+      res.destroy(error);
+      return;
+    }
+  }
 
   if (!url || !isAllowedMediaUrl(url)) {
     return res.status(400).json({
@@ -725,6 +883,14 @@ app.get("/api/download", async (req, res) => {
 
 app.get("/api/preview", async (req, res) => {
   const url = String(req.query.url || "").trim();
+  const youtubeDownload = parseYouTubeDownloadToken(url);
+
+  if (youtubeDownload) {
+    return res.redirect(
+      302,
+      `https://i.ytimg.com/vi/${encodeURIComponent(youtubeDownload.videoId)}/hqdefault.jpg`
+    );
+  }
 
   if (!url || !isAllowedMediaUrl(url)) {
     return res.status(400).json({
@@ -869,6 +1035,21 @@ app.post("/api/facebook", async (req, res) => {
     res.status(error.status || 502).json({
       code: 1,
       msg: error?.message || "Không thể lấy media Facebook.",
+    });
+  }
+});
+
+app.post("/api/youtube", async (req, res) => {
+  const startedAt = Date.now();
+  const url = String(req.body?.url || "").trim();
+
+  try {
+    const data = await extractYouTube(url);
+    res.json(ok(data, startedAt));
+  } catch (error) {
+    res.status(error.status || 502).json({
+      code: 1,
+      msg: error?.message || "Không thể lấy video YouTube.",
     });
   }
 });
