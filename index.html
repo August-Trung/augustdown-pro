@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="vi" class="scroll-smooth">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>AugustDown Pro</title>
+		<script src="https://cdn.tailwindcss.com"></script>
+		<link rel="preconnect" href="https://fonts.googleapis.com" />
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+		<link rel="icon" type="image/png" href="/ver-bigger-logo.png" />
+		<link
+			href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
+			rel="stylesheet" />
+		<style>
+			body {
+				font-family: "Plus Jakarta Sans", sans-serif;
+				background-color: #020617;
+				color: #f8fafc;
+				overflow-x: hidden;
+			}
+			.glass-morphism {
+				background: rgba(15, 23, 42, 0.8);
+				backdrop-filter: blur(8px);
+				border: 1px solid rgba(255, 255, 255, 0.08);
+			}
+			.neon-border {
+				position: relative;
+			}
+			.neon-border::after {
+				content: "";
+				position: absolute;
+				inset: -1px;
+				background: linear-gradient(45deg, #ec4899, #8b5cf6, #06b6d4);
+				z-index: -1;
+				border-radius: inherit;
+				opacity: 0.3;
+			}
+			@keyframes shimmer {
+				0% {
+					background-position: -200% 0;
+				}
+				100% {
+					background-position: 200% 0;
+				}
+			}
+			.animate-shimmer {
+				background: linear-gradient(
+					90deg,
+					transparent,
+					rgba(255, 255, 255, 0.1),
+					transparent
+				);
+				background-size: 200% 100%;
+				animation: shimmer 2s infinite;
+			}
+			::-webkit-scrollbar {
+				width: 6px;
+			}
+			::-webkit-scrollbar-track {
+				background: #020617;
+			}
+			::-webkit-scrollbar-thumb {
+				background: #1e293b;
+				border-radius: 10px;
+			}
+			::-webkit-scrollbar-thumb:hover {
+				background: #334155;
+			}
+		</style>
+		<script type="importmap">
+			{
+				"imports": {
+					"react/": "https://esm.sh/react@^19.2.3/",
+					"react": "https://esm.sh/react@^19.2.3",
+					"react-dom/": "https://esm.sh/react-dom@^19.2.3/"
+				}
+			}
+		</script>
+	</head>
+	<body>
+		<div id="root"></div>
+		<script type="module" src="/index.tsx"></script>
+	</body>
+</html>
