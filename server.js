@@ -50,6 +50,8 @@ const youtubeDownloaderArgs = aria2Path
     ]
   : [];
 
+const youtubeJobs = new Map();
+
 const makeTempDownloadPath = (videoId, extension) =>
   path.join(
     os.tmpdir(),
@@ -420,54 +422,127 @@ const parseYouTubeDownloadToken = (value) => {
   };
 };
 
+const youtubeYtDlpArgs = (videoId, format, tempPath) => {
+  const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
+  if (format === "mp3") {
+    return [
+      "--quiet",
+      "--no-progress",
+      "--no-playlist",
+      "--no-warnings",
+      "--http-chunk-size",
+      "10M",
+      "--retries",
+      "10",
+      ...youtubeDownloaderArgs,
+      "--extract-audio",
+      "--audio-format",
+      "mp3",
+      "--audio-quality",
+      "0",
+      "--output",
+      tempPath,
+      watchUrl,
+    ];
+  }
+
+  return [
+    "--quiet",
+    "--no-progress",
+    "--no-playlist",
+    "--no-warnings",
+    "--http-chunk-size",
+    "10M",
+    "--retries",
+    "10",
+    ...youtubeDownloaderArgs,
+    "--format",
+    `bestvideo[height<=${format}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=${format}]+bestaudio/best[height<=${format}][ext=mp4][vcodec!=none][acodec!=none]/18`,
+    "--merge-output-format",
+    "mp4",
+    "--output",
+    tempPath,
+    watchUrl,
+  ];
+};
+
+const servePreparedYouTubeFile = (job, res) => {
+  res.setHeader("Content-Type", job.contentType);
+  res.setHeader("Content-Disposition", `attachment; filename="${job.filename}"`);
+  res.setHeader("Cache-Control", "private, max-age=0, no-store");
+  try {
+    res.setHeader("Content-Length", fs.statSync(job.tempPath).size);
+  } catch {
+    // Content-Length is optional.
+  }
+
+  const output = fs.createReadStream(job.tempPath);
+  output.on("close", () => {
+    fs.rm(job.tempPath, { force: true }, () => {});
+    youtubeJobs.delete(job.id);
+  });
+  output.pipe(res);
+};
+
+const createYouTubePrepareJob = (videoId, format, filename) => {
+  const isAudio = format === "mp3";
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const tempPath = makeTempDownloadPath(videoId, isAudio ? "mp3" : "mp4");
+  const job = {
+    id,
+    videoId,
+    format,
+    filename: sanitizeFilename(filename),
+    tempPath,
+    contentType: isAudio ? "audio/mpeg" : "video/mp4",
+    status: "preparing",
+    startedAt: Date.now(),
+    readyAt: null,
+    error: "",
+  };
+
+  youtubeJobs.set(id, job);
+  const child = spawn("yt-dlp", youtubeYtDlpArgs(videoId, format, tempPath), {
+    windowsHide: true,
+  });
+  const stderr = [];
+
+  child.stderr.on("data", (chunk) => stderr.push(chunk.toString()));
+  child.on("error", (error) => {
+    job.status = "error";
+    job.error = error?.message || "Không thể chuẩn bị file YouTube.";
+    fs.rm(tempPath, { force: true }, () => {});
+  });
+  child.on("close", (code) => {
+    if (code === 0 && fs.existsSync(tempPath)) {
+      job.status = "ready";
+      job.readyAt = Date.now();
+      return;
+    }
+
+    job.status = "error";
+    job.error = stderr.join("").trim() || `yt-dlp exited with status ${code}`;
+    fs.rm(tempPath, { force: true }, () => {});
+  });
+
+  setTimeout(() => {
+    const current = youtubeJobs.get(id);
+    if (!current || current.status === "preparing") return;
+    if (current.status === "ready") fs.rm(current.tempPath, { force: true }, () => {});
+    youtubeJobs.delete(id);
+  }, 30 * 60 * 1000);
+
+  return job;
+};
+
 const streamYouTubeWithYtDlp = (videoId, format, filename, res) =>
   new Promise((resolve, reject) => {
     const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
     const isAudio = format === "mp3";
     const tempPath = makeTempDownloadPath(videoId, isAudio ? "mp3" : "mp4");
-    const args = isAudio
-      ? [
-          "--quiet",
-          "--no-progress",
-          "--no-playlist",
-          "--no-warnings",
-          "--http-chunk-size",
-          "10M",
-          "--retries",
-          "10",
-          ...youtubeDownloaderArgs,
-          "--extract-audio",
-          "--audio-format",
-          "mp3",
-          "--audio-quality",
-          "0",
-          "--output",
-          tempPath,
-          watchUrl,
-        ]
-      : [
-          "--quiet",
-          "--no-progress",
-          "--no-playlist",
-          "--no-warnings",
-          "--http-chunk-size",
-          "10M",
-          "--retries",
-          "10",
-          ...youtubeDownloaderArgs,
-          "--format",
-          `bestvideo[height<=${format}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=${format}]+bestaudio/best[height<=${format}][ext=mp4][vcodec!=none][acodec!=none]/18`,
-          "--merge-output-format",
-          "mp4",
-          "--output",
-          tempPath,
-          watchUrl,
-        ];
-    const child = spawn(
-      "yt-dlp",
-      args,
-      { windowsHide: true }
-    );
+    const child = spawn("yt-dlp", youtubeYtDlpArgs(videoId, format, tempPath), {
+      windowsHide: true,
+    });
     const stderr = [];
 
     child.stderr.on("data", (chunk) => {
@@ -983,6 +1058,71 @@ app.get("/api/health", (_req, res) => {
       twitter: "coming_soon",
     },
   });
+});
+
+app.post("/api/youtube/prepare", (req, res) => {
+  const youtubeDownload = parseYouTubeDownloadToken(String(req.body?.url || ""));
+  const filename = sanitizeFilename(req.body?.filename);
+
+  if (!youtubeDownload) {
+    return res.status(400).json({
+      code: 1,
+      msg: "YouTube download token không hợp lệ.",
+    });
+  }
+
+  const job = createYouTubePrepareJob(
+    youtubeDownload.videoId,
+    youtubeDownload.format,
+    filename
+  );
+
+  res.json({
+    code: 0,
+    jobId: job.id,
+    status: job.status,
+    startedAt: job.startedAt,
+  });
+});
+
+app.get("/api/youtube/jobs/:id", (req, res) => {
+  const job = youtubeJobs.get(req.params.id);
+  if (!job) {
+    return res.status(404).json({
+      code: 1,
+      msg: "Không tìm thấy job YouTube.",
+    });
+  }
+
+  let bytes = 0;
+  try {
+    bytes = fs.statSync(job.tempPath).size;
+  } catch {
+    // File may not exist until yt-dlp starts writing or finishes merging.
+  }
+
+  res.json({
+    code: 0,
+    id: job.id,
+    status: job.status,
+    error: job.error,
+    elapsedSeconds: Math.round((Date.now() - job.startedAt) / 1000),
+    bytes,
+    downloadUrl:
+      job.status === "ready" ? `/api/youtube/jobs/${job.id}/download` : "",
+  });
+});
+
+app.get("/api/youtube/jobs/:id/download", (req, res) => {
+  const job = youtubeJobs.get(req.params.id);
+  if (!job || job.status !== "ready") {
+    return res.status(404).json({
+      code: 1,
+      msg: "File YouTube chưa sẵn sàng hoặc đã hết hạn.",
+    });
+  }
+
+  servePreparedYouTubeFile(job, res);
 });
 
 app.get("/api/download", async (req, res) => {
