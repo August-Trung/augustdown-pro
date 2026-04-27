@@ -10,7 +10,7 @@ const port = Number(process.env.PORT || 8788);
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 
-const supportedPlatforms = new Set(["instagram", "tiktok"]);
+const supportedPlatforms = new Set(["instagram", "tiktok", "facebook"]);
 
 const platformLabels = {
   instagram: "Instagram",
@@ -70,6 +70,11 @@ const isTikTokUrl = (value) =>
     /(^|\.)((tiktok\.com)|(vm\.tiktok\.com)|(vt\.tiktok\.com))$/i.test(hostname)
   );
 
+const isFacebookUrl = (value) =>
+  isUrlForHost(value, (hostname) =>
+    /(^|\.)((facebook\.com)|(fb\.watch)|(m\.facebook\.com)|(web\.facebook\.com))$/i.test(hostname)
+  );
+
 const makeInstagramId = (url) => {
   const match = url.match(/instagram\.com\/(?:reel|p|tv)\/([^/?#]+)/i);
   return match?.[1] || String(Date.now());
@@ -84,7 +89,7 @@ const normalizeInstagramUrl = (value) => {
 
 const isAllowedMediaUrl = (value) =>
   isUrlForHost(value, (hostname) =>
-    /(^|\.)(fbcdn\.net|cdninstagram\.com|instagram\.com|tikwm\.com|tiktokcdn(?:-[a-z0-9]+)?\.com|byteoversea\.com|ibyteimg\.com|ibytedtos\.com|muscdn\.com|snssdk\.com)$/i.test(
+    /(^|\.)(fbcdn\.net|fbsbx\.com|facebook\.com|cdninstagram\.com|instagram\.com|tikwm\.com|tiktokcdn(?:-[a-z0-9]+)?\.com|byteoversea\.com|ibyteimg\.com|ibytedtos\.com|muscdn\.com|snssdk\.com)$/i.test(
       hostname
     )
   );
@@ -98,6 +103,79 @@ const ok = (data, startedAt) => ({
 
 const publicInstagramError =
   "Instagram không trả dữ liệu media cho link này. Hãy kiểm tra link có public không, không phải story/private/deleted, rồi thử lại.";
+
+const decodeHtmlEntities = (value = "") =>
+  String(value)
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#039;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) =>
+      String.fromCharCode(parseInt(hex, 16))
+    )
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)));
+
+const decodeFacebookValue = (value = "") => {
+  const htmlDecoded = decodeHtmlEntities(value);
+  try {
+    return JSON.parse(`"${htmlDecoded.replace(/"/g, '\\"')}"`);
+  } catch {
+    return htmlDecoded
+      .replace(/\\\//g, "/")
+      .replace(/\\u0025/g, "%")
+      .replace(/\\u0026/g, "&")
+      .replace(/\\u003d/gi, "=");
+  }
+};
+
+const unique = (items) => [...new Set(items.filter(Boolean))];
+
+const getMetaContent = (html, property) => {
+  const escaped = property.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const patterns = [
+    new RegExp(`<meta[^>]+property=["']${escaped}["'][^>]+content=["']([^"']+)["']`, "i"),
+    new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+property=["']${escaped}["']`, "i"),
+    new RegExp(`<meta[^>]+name=["']${escaped}["'][^>]+content=["']([^"']+)["']`, "i"),
+  ];
+  for (const pattern of patterns) {
+    const match = html.match(pattern);
+    if (match?.[1]) return decodeHtmlEntities(match[1]);
+  }
+  return "";
+};
+
+const extractFacebookUrls = (html) => {
+  const patterns = [
+    /"browser_native_hd_url"\s*:\s*"([^"]+)"/g,
+    /"browser_native_sd_url"\s*:\s*"([^"]+)"/g,
+    /"playable_url_quality_hd"\s*:\s*"([^"]+)"/g,
+    /"playable_url"\s*:\s*"([^"]+)"/g,
+    /"hd_src"\s*:\s*"([^"]+)"/g,
+    /"sd_src"\s*:\s*"([^"]+)"/g,
+    /hd_src_no_ratelimit:"([^"]+)"/g,
+    /sd_src_no_ratelimit:"([^"]+)"/g,
+    /https?:\\\/\\\/[^"'<>]+?\.mp4[^"'<>]*/g,
+    /https?:\/\/[^"'<>]+?\.mp4[^"'<>]*/g,
+  ];
+
+  const urls = [];
+  for (const pattern of patterns) {
+    for (const match of html.matchAll(pattern)) {
+      const raw = match[1] || match[0];
+      const decoded = decodeFacebookValue(raw);
+      if (/^https?:\/\//i.test(decoded)) urls.push(decoded);
+    }
+  }
+
+  return unique(urls);
+};
+
+const refererForMediaUrl = (url) => {
+  if (/facebook|fbcdn|fbsbx/i.test(url)) return "https://www.facebook.com/";
+  if (/tik/i.test(url)) return "https://www.tiktok.com/";
+  return "https://www.instagram.com/";
+};
 
 const extractInstagram = async (sourceUrl) => {
   if (!isInstagramUrl(sourceUrl)) {
@@ -248,9 +326,118 @@ const extractTikTok = async (sourceUrl) => {
   };
 };
 
+const makeFacebookId = (url) => {
+  const idMatch = url.match(/(?:videos|reel|watch|posts)\/(\d+)/i);
+  if (idMatch?.[1]) return idMatch[1];
+
+  try {
+    const parsed = new URL(url);
+    return (
+      parsed.searchParams.get("v") ||
+      parsed.searchParams.get("story_fbid") ||
+      parsed.pathname.split("/").filter(Boolean).pop() ||
+      String(Date.now())
+    );
+  } catch {
+    return String(Date.now());
+  }
+};
+
+const extractFacebook = async (sourceUrl) => {
+  if (!isFacebookUrl(sourceUrl)) {
+    const error = new Error("Vui lòng nhập link Facebook hợp lệ.");
+    error.status = 400;
+    throw error;
+  }
+
+  const response = await fetch(sourceUrl, {
+    redirect: "follow",
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+      "Accept-Language": "vi,en-US;q=0.9,en;q=0.8",
+      Accept:
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Facebook responded ${response.status}.`);
+  }
+
+  const html = await response.text();
+  const resolvedUrl = response.url || sourceUrl;
+  const videoUrls = extractFacebookUrls(html);
+  const cover =
+    getMetaContent(html, "og:image") ||
+    getMetaContent(html, "twitter:image") ||
+    "/ver-bigger-logo.png";
+  const title =
+    getMetaContent(html, "og:title") ||
+    getMetaContent(html, "twitter:title") ||
+    "Facebook media";
+  const description =
+    getMetaContent(html, "og:description") ||
+    getMetaContent(html, "description") ||
+    title;
+  const siteName = getMetaContent(html, "og:site_name") || "Facebook";
+  const id = makeFacebookId(resolvedUrl);
+
+  const media = videoUrls.map((url, index) => ({
+    id: `${id}-video-${index + 1}`,
+    type: "video",
+    url,
+    thumbnail: cover,
+    filename: filenameFor("facebook", id, index, "video", title),
+  }));
+
+  const ogVideo = getMetaContent(html, "og:video");
+  if (ogVideo && !media.some((item) => item.url === ogVideo)) {
+    media.push({
+      id: `${id}-video-${media.length + 1}`,
+      type: "video",
+      url: ogVideo,
+      thumbnail: cover,
+      filename: filenameFor("facebook", id, media.length, "video", title),
+    });
+  }
+
+  if (!media.length && cover && cover !== "/ver-bigger-logo.png") {
+    media.push({
+      id: `${id}-image-1`,
+      type: "image",
+      url: cover,
+      thumbnail: cover,
+      filename: filenameFor("facebook", id, 0, "image", title),
+    });
+  }
+
+  if (!media.length) {
+    throw new Error(
+      "Facebook không trả dữ liệu media cho link này. Hãy kiểm tra link có public không, không phải private/group/story/deleted, rồi thử lại."
+    );
+  }
+
+  return {
+    platform: "facebook",
+    id,
+    sourceUrl: resolvedUrl,
+    title: description,
+    cover,
+    author: {
+      id: "facebook",
+      unique_id: "facebook",
+      nickname: siteName,
+      avatar: "/ver-bigger-logo.png",
+    },
+    media,
+  };
+};
+
 const extractByPlatform = async (platform, url) => {
   if (platform === "instagram") return extractInstagram(url);
   if (platform === "tiktok") return extractTikTok(url);
+  if (platform === "facebook") return extractFacebook(url);
 
   const label = platformLabels[platform] || platform || "Platform";
   const error = new Error(`${label} đang ở trạng thái coming soon hoặc experimental.`);
@@ -265,7 +452,7 @@ app.get("/api/health", (_req, res) => {
     platforms: {
       instagram: "ready",
       tiktok: "ready",
-      facebook: "experimental",
+      facebook: "ready",
       youtube: "coming_soon",
       twitter: "coming_soon",
     },
@@ -288,7 +475,7 @@ app.get("/api/download", async (req, res) => {
       headers: {
         "User-Agent":
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        Referer: url.includes("tik") ? "https://www.tiktok.com/" : "https://www.instagram.com/",
+        Referer: refererForMediaUrl(url),
       },
     });
 
@@ -336,7 +523,7 @@ app.get("/api/preview", async (req, res) => {
       headers: {
         "User-Agent":
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        Referer: url.includes("tik") ? "https://www.tiktok.com/" : "https://www.instagram.com/",
+        Referer: refererForMediaUrl(url),
       },
     });
 
@@ -424,6 +611,21 @@ app.post("/api/tiktok", async (req, res) => {
     res.status(error.status || 502).json({
       code: 1,
       msg: error?.message || "Không thể lấy media TikTok.",
+    });
+  }
+});
+
+app.post("/api/facebook", async (req, res) => {
+  const startedAt = Date.now();
+  const url = String(req.body?.url || "").trim();
+
+  try {
+    const data = await extractFacebook(url);
+    res.json(ok(data, startedAt));
+  } catch (error) {
+    res.status(error.status || 502).json({
+      code: 1,
+      msg: error?.message || "Không thể lấy media Facebook.",
     });
   }
 });
