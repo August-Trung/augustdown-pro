@@ -57,7 +57,8 @@ const PreviewImage: React.FC<PreviewImageProps> = ({
       {...props}
       src={blobUrl || getPreviewUrl(source || fallback)}
       onError={(event) => {
-        if (event.currentTarget.src !== fallback) {
+        if (!event.currentTarget.dataset.fallbackApplied) {
+          event.currentTarget.dataset.fallbackApplied = "1";
           event.currentTarget.src = fallback;
         }
         props.onError?.(event);

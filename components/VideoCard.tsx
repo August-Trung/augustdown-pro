@@ -14,6 +14,12 @@ const VideoCard: React.FC<VideoCardProps> = ({ data, t }) => {
   const [selected, setSelected] = useState(data.media[0]);
   const isYouTube = data.platform === "youtube";
   const isProxyToken = selected.url.startsWith("youtube:");
+  const hasRealThumbnail = (item: MediaItem) =>
+    Boolean(
+      item.thumbnail &&
+        item.thumbnail !== item.url &&
+        !item.thumbnail.includes("ver-bigger-logo")
+    );
 
   useEffect(() => {
     setSelected(data.media[0]);
@@ -70,7 +76,7 @@ const VideoCard: React.FC<VideoCardProps> = ({ data, t }) => {
           {selected.type === "video" ? (
             <video
               src={isProxyToken ? undefined : selected.url}
-              poster={getPreviewUrl(selected.thumbnail)}
+              poster={hasRealThumbnail(selected) ? getPreviewUrl(selected.thumbnail) : undefined}
               className="w-full h-full object-cover aspect-video md:aspect-auto"
               controls
               playsInline
@@ -175,11 +181,22 @@ const VideoCard: React.FC<VideoCardProps> = ({ data, t }) => {
                     }`}
                     title={`Media ${index + 1}`}
                   >
-                    <PreviewImage
-                      source={item.thumbnail || item.url || data.cover}
-                      alt={`Media ${index + 1}`}
-                      className="w-full h-full object-cover"
-                    />
+                    {item.type !== "video" || hasRealThumbnail(item) ? (
+                      <PreviewImage
+                        source={item.thumbnail || item.url || data.cover}
+                        alt={`Media ${index + 1}`}
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div className="w-full h-full bg-zinc-950 flex flex-col items-center justify-center text-white">
+                        <span className="w-8 h-8 rounded-full border border-white/25 flex items-center justify-center text-xs mb-1">
+                          ▶
+                        </span>
+                        <span className="text-[8px] font-black tracking-widest text-zinc-400">
+                          VIDEO
+                        </span>
+                      </div>
+                    )}
                     <span className="absolute bottom-1 right-1 bg-black/70 text-white text-[8px] px-1 rounded">
                       {index + 1}
                     </span>
