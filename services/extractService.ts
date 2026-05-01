@@ -1,5 +1,13 @@
 import { ExtractResponse, Platform } from "../types";
 
+export const facebookCookieKey = "augustdown_facebook_cookie_v1";
+export const youtubeCookieKey = "augustdown_youtube_cookie_v1";
+
+const getStoredCookie = (key: string) => localStorage.getItem(key) || "";
+
+export const getFacebookCookie = () => getStoredCookie(facebookCookieKey);
+export const getYouTubeCookie = () => getStoredCookie(youtubeCookieKey);
+
 export const fetchExtractedMedia = async (
   platform: Platform,
   url: string
@@ -12,7 +20,14 @@ export const fetchExtractedMedia = async (
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ platform, url: cleanUrl }),
+    body: JSON.stringify({
+      platform,
+      url: cleanUrl,
+      cookies: {
+        facebook: getFacebookCookie(),
+        youtube: getYouTubeCookie(),
+      },
+    }),
   });
 
   const data = await response.json();
@@ -27,12 +42,10 @@ export const fetchFacebookSession = async (): Promise<{
   configured: boolean;
   source: string;
 }> => {
-  const response = await fetch("/api/facebook/session");
-  const data = await response.json();
-  if (!response.ok || data.code !== 0) {
-    throw new Error(data.msg || "Could not read Facebook session");
-  }
-  return data;
+  return {
+    configured: Boolean(getFacebookCookie()),
+    source: "localStorage",
+  };
 };
 
 export const saveFacebookSession = async (cookie: string): Promise<void> => {
@@ -48,29 +61,21 @@ export const saveFacebookSession = async (cookie: string): Promise<void> => {
   if (!response.ok || data.code !== 0) {
     throw new Error(data.msg || "Could not save Facebook session");
   }
+  localStorage.setItem(facebookCookieKey, cookie);
 };
 
 export const clearFacebookSession = async (): Promise<void> => {
-  const response = await fetch("/api/facebook/session", {
-    method: "DELETE",
-  });
-
-  const data = await response.json();
-  if (!response.ok || data.code !== 0) {
-    throw new Error(data.msg || "Could not clear Facebook session");
-  }
+  localStorage.removeItem(facebookCookieKey);
 };
 
 export const fetchYouTubeSession = async (): Promise<{
   configured: boolean;
   source: string;
 }> => {
-  const response = await fetch("/api/youtube/session");
-  const data = await response.json();
-  if (!response.ok || data.code !== 0) {
-    throw new Error(data.msg || "Could not read YouTube session");
-  }
-  return data;
+  return {
+    configured: Boolean(getYouTubeCookie()),
+    source: "localStorage",
+  };
 };
 
 export const saveYouTubeSession = async (cookie: string): Promise<void> => {
@@ -86,15 +91,9 @@ export const saveYouTubeSession = async (cookie: string): Promise<void> => {
   if (!response.ok || data.code !== 0) {
     throw new Error(data.msg || "Could not save YouTube session");
   }
+  localStorage.setItem(youtubeCookieKey, cookie);
 };
 
 export const clearYouTubeSession = async (): Promise<void> => {
-  const response = await fetch("/api/youtube/session", {
-    method: "DELETE",
-  });
-
-  const data = await response.json();
-  if (!response.ok || data.code !== 0) {
-    throw new Error(data.msg || "Could not clear YouTube session");
-  }
+  localStorage.removeItem(youtubeCookieKey);
 };

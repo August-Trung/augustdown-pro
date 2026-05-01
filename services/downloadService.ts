@@ -1,3 +1,5 @@
+import { getFacebookCookie, getYouTubeCookie } from "./extractService";
+
 export const downloadMediaFile = async (
   url: string,
   filename: string,
@@ -11,7 +13,7 @@ export const downloadMediaFile = async (
     const prepareResponse = await fetch("/api/youtube/prepare", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, filename }),
+      body: JSON.stringify({ url, filename, cookie: getYouTubeCookie() }),
     });
     if (!prepareResponse.ok) throw new Error("Could not prepare YouTube file");
     const prepareData = await prepareResponse.json();
@@ -46,6 +48,25 @@ export const downloadMediaFile = async (
   }
 
   const anchor = document.createElement("a");
+  const facebookCookie = getFacebookCookie();
+  if (facebookCookie && /facebook|fbcdn|fbsbx/i.test(url)) {
+    const response = await fetch(downloadUrl, {
+      headers: {
+        "x-augustdown-facebook-cookie": facebookCookie,
+      },
+    });
+    if (!response.ok) throw new Error("Could not download media");
+    const blob = await response.blob();
+    const blobUrl = window.URL.createObjectURL(blob);
+    anchor.href = blobUrl;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    window.URL.revokeObjectURL(blobUrl);
+    document.body.removeChild(anchor);
+    return;
+  }
+
   anchor.href = downloadUrl;
   anchor.download = filename;
   anchor.rel = "noopener";

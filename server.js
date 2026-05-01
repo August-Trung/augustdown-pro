@@ -11,9 +11,6 @@ import ytdl from "@distube/ytdl-core";
 
 const app = express();
 const port = Number(process.env.PORT || 8788);
-const facebookCookiePath = path.join(process.cwd(), "facebook-cookie.local");
-const youtubeCookiePath = path.join(process.cwd(), "youtube-cookie.local");
-
 const findAria2Path = () => {
   const envPath = process.env.ARIA2C_PATH;
   if (envPath && fs.existsSync(envPath)) return envPath;
@@ -214,15 +211,13 @@ const normalizeCookie = (value = "") => {
     .trim();
 };
 
-const getFacebookCookie = () => {
+const getFacebookCookie = (requestCookie = "") => {
+  const normalizedRequestCookie = normalizeCookie(requestCookie);
+  if (normalizedRequestCookie) return normalizedRequestCookie;
+
   const envCookie = normalizeCookie(process.env.FACEBOOK_COOKIE || "");
   if (envCookie) return envCookie;
-
-  try {
-    return normalizeCookie(fs.readFileSync(facebookCookiePath, "utf8"));
-  } catch {
-    return "";
-  }
+  return "";
 };
 
 const hasUsableFacebookCookie = (cookie) =>
@@ -405,12 +400,12 @@ const refererForMediaUrl = (url) => {
   return "https://www.instagram.com/";
 };
 
-const mediaHeaders = (url) => ({
+const mediaHeaders = (url, cookieOverride = "") => ({
   "User-Agent":
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
   Referer: refererForMediaUrl(url),
-  ...(/facebook|fbcdn|fbsbx/i.test(url) && getFacebookCookie()
-    ? { Cookie: getFacebookCookie() }
+  ...(/facebook|fbcdn|fbsbx/i.test(url) && getFacebookCookie(cookieOverride)
+    ? { Cookie: getFacebookCookie(cookieOverride) }
     : {}),
 });
 
@@ -423,15 +418,13 @@ const parseYouTubeDownloadToken = (value) => {
   };
 };
 
-const getYouTubeCookie = () => {
+const getYouTubeCookie = (requestCookie = "") => {
+  const normalizedRequestCookie = normalizeCookie(requestCookie);
+  if (normalizedRequestCookie) return normalizedRequestCookie;
+
   const envCookie = normalizeCookie(process.env.YOUTUBE_COOKIE || "");
   if (envCookie) return envCookie;
-
-  try {
-    return normalizeCookie(fs.readFileSync(youtubeCookiePath, "utf8"));
-  } catch {
-    return "";
-  }
+  return "";
 };
 
 const hasUsableYouTubeCookie = (cookie) =>
@@ -440,9 +433,9 @@ const hasUsableYouTubeCookie = (cookie) =>
   /(?:^|;\s*)SID=/.test(cookie) ||
   /(?:^|;\s*)LOGIN_INFO=/.test(cookie);
 
-const youtubeYtDlpArgs = (videoId, format, tempPath) => {
+const youtubeYtDlpArgs = (videoId, format, tempPath, cookieOverride = "") => {
   const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
-  const cookie = getYouTubeCookie();
+  const cookie = getYouTubeCookie(cookieOverride);
   const cookieArgs = cookie ? ["--add-header", `Cookie:${cookie}`] : [];
   if (format === "mp3") {
     return [
@@ -504,7 +497,7 @@ const servePreparedYouTubeFile = (job, res) => {
   output.pipe(res);
 };
 
-const createYouTubePrepareJob = (videoId, format, filename) => {
+const createYouTubePrepareJob = (videoId, format, filename, cookieOverride = "") => {
   const isAudio = format === "mp3";
   const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const tempPath = makeTempDownloadPath(videoId, isAudio ? "mp3" : "mp4");
@@ -525,7 +518,7 @@ const createYouTubePrepareJob = (videoId, format, filename) => {
   };
 
   youtubeJobs.set(id, job);
-  const child = spawn("yt-dlp", youtubeYtDlpArgs(videoId, format, tempPath), {
+  const child = spawn("yt-dlp", youtubeYtDlpArgs(videoId, format, tempPath, cookieOverride), {
     windowsHide: true,
   });
   const stderr = [];
@@ -681,9 +674,9 @@ const streamYouTubeWithYtDlp = (videoId, format, filename, res) =>
     });
   });
 
-const getYouTubeInfoWithYtDlp = (sourceUrl) =>
+const getYouTubeInfoWithYtDlp = (sourceUrl, cookieOverride = "") =>
   new Promise((resolve, reject) => {
-    const cookie = getYouTubeCookie();
+    const cookie = getYouTubeCookie(cookieOverride);
     const child = spawn(
       "yt-dlp",
       [
@@ -948,14 +941,14 @@ const makeFacebookId = (url) => {
   }
 };
 
-const extractFacebook = async (sourceUrl) => {
+const extractFacebook = async (sourceUrl, cookieOverride = "") => {
   if (!isFacebookUrl(sourceUrl)) {
     const error = new Error("Vui lòng nhập link Facebook hợp lệ.");
     error.status = 400;
     throw error;
   }
 
-  const facebookCookie = getFacebookCookie();
+  const facebookCookie = getFacebookCookie(cookieOverride);
   const hasCookie = hasUsableFacebookCookie(facebookCookie);
   const response = await fetch(sourceUrl, {
     redirect: "follow",
@@ -1097,14 +1090,14 @@ const chooseYouTubeFormat = (formats) => {
     .sort((a, b) => (toNumber(b.height) || 0) - (toNumber(a.height) || 0))[0];
 };
 
-const extractYouTube = async (sourceUrl) => {
+const extractYouTube = async (sourceUrl, cookieOverride = "") => {
   if (!isYouTubeUrl(sourceUrl)) {
     const error = new Error("Vui lòng nhập link YouTube hợp lệ.");
     error.status = 400;
     throw error;
   }
 
-  const info = await getYouTubeInfoWithYtDlp(sourceUrl);
+  const info = await getYouTubeInfoWithYtDlp(sourceUrl, cookieOverride);
   const thumbnails = Array.isArray(info.thumbnails) ? info.thumbnails : [];
   const cover =
     info.thumbnail ||
@@ -1133,11 +1126,11 @@ const extractYouTube = async (sourceUrl) => {
   };
 };
 
-const extractByPlatform = async (platform, url) => {
+const extractByPlatform = async (platform, url, cookies = {}) => {
   if (platform === "instagram") return extractInstagram(url);
   if (platform === "tiktok") return extractTikTok(url);
-  if (platform === "facebook") return extractFacebook(url);
-  if (platform === "youtube") return extractYouTube(url);
+  if (platform === "facebook") return extractFacebook(url, cookies.facebook);
+  if (platform === "youtube") return extractYouTube(url, cookies.youtube);
 
   const label = platformLabels[platform] || platform || "Platform";
   const error = new Error(`${label} đang ở trạng thái coming soon hoặc experimental.`);
@@ -1162,6 +1155,7 @@ app.get("/api/health", (_req, res) => {
 app.post("/api/youtube/prepare", (req, res) => {
   const youtubeDownload = parseYouTubeDownloadToken(String(req.body?.url || ""));
   const filename = sanitizeFilename(req.body?.filename);
+  const youtubeCookie = req.body?.cookie || req.body?.cookies?.youtube || "";
 
   if (!youtubeDownload) {
     return res.status(400).json({
@@ -1173,7 +1167,8 @@ app.post("/api/youtube/prepare", (req, res) => {
   const job = createYouTubePrepareJob(
     youtubeDownload.videoId,
     youtubeDownload.format,
-    filename
+    filename,
+    youtubeCookie
   );
 
   res.json({
@@ -1262,8 +1257,9 @@ app.get("/api/download", async (req, res) => {
   }
 
   try {
+    const cookieOverride = req.get("x-augustdown-facebook-cookie") || "";
     const upstream = await fetch(url, {
-      headers: mediaHeaders(url),
+      headers: mediaHeaders(url, cookieOverride),
     });
 
     if (!upstream.ok || !upstream.body) {
@@ -1314,8 +1310,9 @@ app.get("/api/preview", async (req, res) => {
   }
 
   try {
+    const cookieOverride = req.get("x-augustdown-facebook-cookie") || "";
     const upstream = await fetch(url, {
-      headers: mediaHeaders(url),
+      headers: mediaHeaders(url, cookieOverride),
     });
 
     if (!upstream.ok || !upstream.body) {
@@ -1348,7 +1345,7 @@ app.get("/api/facebook/session", (_req, res) => {
   res.json({
     code: 0,
     configured: hasUsableFacebookCookie(cookie),
-    source: process.env.FACEBOOK_COOKIE ? "env" : cookie ? "local" : "none",
+    source: process.env.FACEBOOK_COOKIE ? "env" : "browser",
   });
 });
 
@@ -1362,16 +1359,10 @@ app.post("/api/facebook/session", (req, res) => {
     });
   }
 
-  fs.writeFileSync(facebookCookiePath, cookie, "utf8");
   res.json({ code: 0, configured: true });
 });
 
 app.delete("/api/facebook/session", (_req, res) => {
-  try {
-    fs.rmSync(facebookCookiePath, { force: true });
-  } catch {
-    // File is optional.
-  }
   res.json({ code: 0, configured: Boolean(process.env.FACEBOOK_COOKIE) });
 });
 
@@ -1380,7 +1371,7 @@ app.get("/api/youtube/session", (_req, res) => {
   res.json({
     code: 0,
     configured: hasUsableYouTubeCookie(cookie),
-    source: process.env.YOUTUBE_COOKIE ? "env" : cookie ? "local" : "none",
+    source: process.env.YOUTUBE_COOKIE ? "env" : "browser",
   });
 });
 
@@ -1394,16 +1385,10 @@ app.post("/api/youtube/session", (req, res) => {
     });
   }
 
-  fs.writeFileSync(youtubeCookiePath, cookie, "utf8");
   res.json({ code: 0, configured: true });
 });
 
 app.delete("/api/youtube/session", (_req, res) => {
-  try {
-    fs.rmSync(youtubeCookiePath, { force: true });
-  } catch {
-    // File is optional.
-  }
   res.json({ code: 0, configured: Boolean(process.env.YOUTUBE_COOKIE) });
 });
 
@@ -1411,6 +1396,10 @@ app.post("/api/extract", async (req, res) => {
   const startedAt = Date.now();
   const platform = String(req.body?.platform || "").trim().toLowerCase();
   const url = String(req.body?.url || "").trim();
+  const cookies = {
+    facebook: req.body?.cookies?.facebook || req.body?.facebookCookie || "",
+    youtube: req.body?.cookies?.youtube || req.body?.youtubeCookie || "",
+  };
 
   if (!platform || !url) {
     return res.status(400).json({
@@ -1427,7 +1416,7 @@ app.post("/api/extract", async (req, res) => {
   }
 
   try {
-    const data = await extractByPlatform(platform, url);
+    const data = await extractByPlatform(platform, url, cookies);
     res.json(ok(data, startedAt));
   } catch (error) {
     console.error(`${platformLabels[platform] || platform} fetch failed:`, error);
