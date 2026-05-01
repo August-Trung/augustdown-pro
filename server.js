@@ -7,10 +7,13 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { fileURLToPath } from "node:url";
 import ytdl from "@distube/ytdl-core";
 
 const app = express();
 const port = Number(process.env.PORT || 8788);
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const distPath = path.join(__dirname, "dist");
 const findAria2Path = () => {
   const envPath = process.env.ARIA2C_PATH;
   if (envPath && fs.existsSync(envPath)) return envPath;
@@ -1488,6 +1491,13 @@ app.post("/api/youtube", async (req, res) => {
     });
   }
 });
+
+if (fs.existsSync(distPath)) {
+  app.use(express.static(distPath));
+  app.get(/^(?!\/api).*/, (_req, res) => {
+    res.sendFile(path.join(distPath, "index.html"));
+  });
+}
 
 app.listen(port, () => {
   console.log(`AugustDown Pro API running at http://localhost:${port}`);

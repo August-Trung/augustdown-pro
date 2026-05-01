@@ -44,6 +44,24 @@ winget install --id aria2.aria2 --exact
 npm run build
 ```
 
+## Deploy
+
+Production can run as one Node app:
+
+```bash
+npm install
+npm run build
+npm run server
+```
+
+`server.js` serves both `dist/` and `/api/*`, so the public domain should point
+to this Node process. If the frontend is hosted separately as static files, set
+`VITE_API_BASE_URL` at build time to the backend origin, for example:
+
+```bash
+VITE_API_BASE_URL=https://api.example.com npm run build
+```
+
 ## API
 
 Health check:
@@ -68,4 +86,4 @@ curl "http://localhost:8788/api/download?url=<media-url>&filename=media.mp4"
 
 ## Notes
 
-Private, deleted, geo-blocked, story-only, group-only, login-gated, or expired URLs may fail depending on upstream platform limits. Facebook Story/highlight URLs often require a logged-in session cookie with permission to view that story. For local use, select Facebook and paste either a raw cookie header, a JSON cookie export, or `c_user: ...` / `xs: ...` lines; it is saved to ignored local file `facebook-cookie.local`. Download only content you have rights to use.
+Private, deleted, geo-blocked, story-only, group-only, login-gated, or expired URLs may fail depending on upstream platform limits. Facebook Story/highlight URLs often require a logged-in session cookie with permission to view that story. The browser stores Facebook and YouTube cookies in `localStorage` and sends them to the backend only when extracting/downloading. Download only content you have rights to use.

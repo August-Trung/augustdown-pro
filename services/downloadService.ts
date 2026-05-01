@@ -1,3 +1,4 @@
+import { apiUrl, readJsonResponse } from "./apiClient";
 import { getFacebookCookie, getYouTubeCookie } from "./extractService";
 
 export const downloadMediaFile = async (
@@ -5,25 +6,32 @@ export const downloadMediaFile = async (
   filename: string,
   onProgress?: (status: { progress?: number; speed?: string; phase?: string }) => void
 ): Promise<void> => {
-  const downloadUrl = `/api/download?url=${encodeURIComponent(
+  const downloadUrl = apiUrl(`/api/download?url=${encodeURIComponent(
     url
-  )}&filename=${encodeURIComponent(filename)}`;
+  )}&filename=${encodeURIComponent(filename)}`);
 
   if (url.startsWith("youtube:")) {
-    const prepareResponse = await fetch("/api/youtube/prepare", {
+    const prepareResponse = await fetch(apiUrl("/api/youtube/prepare"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url, filename, cookie: getYouTubeCookie() }),
     });
     if (!prepareResponse.ok) throw new Error("Could not prepare YouTube file");
-    const prepareData = await prepareResponse.json();
+    const prepareData = await readJsonResponse<{ jobId: string }>(prepareResponse);
     const jobId = prepareData.jobId;
 
     for (;;) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
-      const jobResponse = await fetch(`/api/youtube/jobs/${jobId}`);
+      const jobResponse = await fetch(apiUrl(`/api/youtube/jobs/${jobId}`));
       if (!jobResponse.ok) throw new Error("Could not check YouTube job");
-      const job = await jobResponse.json();
+      const job = await readJsonResponse<{
+        status: string;
+        progress?: number;
+        speed?: string;
+        phase?: string;
+        error?: string;
+        downloadUrl?: string;
+      }>(jobResponse);
       onProgress?.({
         progress: job.progress,
         speed: job.speed,
@@ -36,7 +44,7 @@ export const downloadMediaFile = async (
 
       if (job.status === "ready" && job.downloadUrl) {
         const anchor = document.createElement("a");
-        anchor.href = job.downloadUrl;
+        anchor.href = apiUrl(job.downloadUrl);
         anchor.download = filename;
         anchor.rel = "noopener";
         document.body.appendChild(anchor);
@@ -78,5 +86,5 @@ export const downloadMediaFile = async (
 export const getPreviewUrl = (url?: string): string => {
   if (!url) return "/ver-bigger-logo.png";
   if (url.startsWith("/")) return url;
-  return `/api/preview?url=${encodeURIComponent(url)}`;
+  return apiUrl(`/api/preview?url=${encodeURIComponent(url)}`);
 };

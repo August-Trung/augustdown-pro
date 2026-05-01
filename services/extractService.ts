@@ -1,4 +1,5 @@
 import { ExtractResponse, Platform } from "../types";
+import { apiUrl, readJsonResponse } from "./apiClient";
 
 export const facebookCookieKey = "augustdown_facebook_cookie_v1";
 export const youtubeCookieKey = "augustdown_youtube_cookie_v1";
@@ -23,7 +24,7 @@ export const fetchExtractedMedia = async (
   const cleanUrl = url.trim();
   if (!cleanUrl) throw new Error("URL is empty");
 
-  const response = await fetch("/api/extract", {
+  const response = await fetch(apiUrl("/api/extract"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -38,7 +39,9 @@ export const fetchExtractedMedia = async (
     }),
   });
 
-  const data = await response.json();
+  const data = await readJsonResponse<{ code: number; msg?: string } & ExtractResponse>(
+    response
+  );
   if (!response.ok || data.code !== 0) {
     throw new Error(data.msg || "Could not fetch media");
   }
@@ -59,7 +62,7 @@ export const fetchFacebookSession = async (): Promise<{
 export const saveFacebookSession = async (cookie: string): Promise<void> => {
   const normalizedCookie = normalizeCookieInput(cookie);
   if (!hasFacebookCookieKeys(normalizedCookie)) {
-    throw new Error("Cookie Facebook cần có ít nhất c_user và xs.");
+    throw new Error("Cookie Facebook can co it nhat c_user va xs.");
   }
   localStorage.setItem(facebookCookieKey, normalizedCookie);
 };
@@ -81,7 +84,7 @@ export const fetchYouTubeSession = async (): Promise<{
 export const saveYouTubeSession = async (cookie: string): Promise<void> => {
   const normalizedCookie = normalizeCookieInput(cookie);
   if (!hasYouTubeCookieKeys(normalizedCookie)) {
-    throw new Error("Cookie YouTube không hợp lệ.");
+    throw new Error("Cookie YouTube khong hop le.");
   }
   localStorage.setItem(youtubeCookieKey, normalizedCookie);
 };
