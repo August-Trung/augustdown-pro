@@ -1,6 +1,6 @@
 import React from "react";
 import { ExtractedMediaData } from "../types";
-import { getPreviewUrl } from "../services/downloadService";
+import PreviewImage from "./PreviewImage";
 
 interface HistorySectionProps {
   history: ExtractedMediaData[];
@@ -40,8 +40,8 @@ const HistorySection: React.FC<HistorySectionProps> = ({
             className="group relative bg-zinc-900/40 rounded-xl border border-white/5 overflow-hidden hover:border-rose-500/30 transition-all hover:shadow-2xl hover:shadow-rose-500/5"
           >
             <div className="aspect-[9/16] relative overflow-hidden">
-              <img
-                src={getPreviewUrl(item.cover)}
+              <PreviewImage
+                source={item.cover}
                 className="w-full h-full object-cover opacity-65 group-hover:opacity-85 group-hover:scale-110 transition-all duration-500"
                 alt="history thumbnail"
               />

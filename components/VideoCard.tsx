@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { ExtractedMediaData, MediaItem } from "../types";
 import { downloadMediaFile, getPreviewUrl } from "../services/downloadService";
+import PreviewImage from "./PreviewImage";
 
 interface VideoCardProps {
   data: ExtractedMediaData;
@@ -76,8 +77,8 @@ const VideoCard: React.FC<VideoCardProps> = ({ data, t }) => {
             />
           ) : selected.type === "audio" ? (
             <div className="w-full h-full min-h-[220px] flex flex-col items-center justify-center bg-zinc-950 p-5">
-              <img
-                src={getPreviewUrl(selected.thumbnail)}
+              <PreviewImage
+                source={selected.thumbnail || data.cover}
                 alt={selected.label || data.title}
                 className="w-28 h-28 rounded-xl object-cover border border-white/10 mb-4"
               />
@@ -86,8 +87,8 @@ const VideoCard: React.FC<VideoCardProps> = ({ data, t }) => {
               </span>
             </div>
           ) : (
-            <img
-              src={getPreviewUrl(selected.url)}
+            <PreviewImage
+              source={selected.thumbnail || selected.url || data.cover}
               alt={data.title}
               className="w-full h-full object-cover aspect-video md:aspect-auto"
             />
@@ -108,8 +109,8 @@ const VideoCard: React.FC<VideoCardProps> = ({ data, t }) => {
           <div>
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2.5">
-                <img
-                  src={getPreviewUrl(data.author.avatar)}
+                <PreviewImage
+                  source={data.author.avatar || data.cover}
                   className="w-9 h-9 rounded-full border border-white/10 shadow-lg"
                   alt={data.author.nickname}
                 />
@@ -174,8 +175,8 @@ const VideoCard: React.FC<VideoCardProps> = ({ data, t }) => {
                     }`}
                     title={`Media ${index + 1}`}
                   >
-                    <img
-                      src={getPreviewUrl(item.thumbnail)}
+                    <PreviewImage
+                      source={item.thumbnail || item.url || data.cover}
                       alt={`Media ${index + 1}`}
                       className="w-full h-full object-cover"
                     />
